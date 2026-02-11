@@ -263,6 +263,64 @@ describe('MessageList', () => {
     expect(lastFrame()).toContain('Here are the results.');
   });
 
+  it('renders markdown - strips bold syntax from completed messages', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'This has **bold text** in it',
+        isStreaming: false,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+    const frame = lastFrame() ?? '';
+
+    // The text content should be present
+    expect(frame).toContain('bold text');
+    // The raw markdown ** markers should NOT be present
+    expect(frame).not.toContain('**bold text**');
+  });
+
+  it('renders markdown - strips bold inside list items', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: '* **General Knowledge:** writing and analysis\n* **Web Research:** searching the web',
+        isStreaming: false,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+    const frame = lastFrame() ?? '';
+
+    // The text content should be present
+    expect(frame).toContain('General Knowledge');
+    expect(frame).toContain('Web Research');
+    // The raw ** markers should NOT be present
+    expect(frame).not.toContain('**General Knowledge:**');
+    expect(frame).not.toContain('**Web Research:**');
+  });
+
+  it('renders markdown - strips list syntax from completed messages', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: '* item one\n* item two\n* item three',
+        isStreaming: false,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+    const frame = lastFrame() ?? '';
+
+    // The text content should be present
+    expect(frame).toContain('item one');
+    expect(frame).toContain('item two');
+  });
+
   it('handles empty content gracefully', () => {
     const messages: Message[] = [
       {

@@ -17,17 +17,24 @@
  */
 import { Box, Text } from 'ink';
 import { marked } from 'marked';
-import TerminalRenderer from 'marked-terminal';
+import { markedTerminal } from 'marked-terminal';
 import { useMemo } from 'react';
 import { ChartRenderer, isChartToolCall } from './ChartRenderer.js';
 
-// Configure marked with terminal renderer
-marked.setOptions({
-  renderer: new TerminalRenderer({
-    reflowText: true,
-    width: 80,
-  }) as any,
+// Configure marked with terminal renderer.
+// Patch: marked-terminal v7.3.0's text renderer returns raw text instead of
+// parsing inline tokens, so bold/italic inside list items shows as raw markdown.
+const ext = markedTerminal({
+  reflowText: true,
+  width: process.stdout.columns || 80,
 });
+const origText = ext.renderer!.text!;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ext.renderer!.text = function (this: any, token: any) {
+  if (token?.tokens) return this.parser.parseInline(token.tokens);
+  return origText.call(this, token);
+};
+marked.use(ext);
 
 function renderMarkdown(content: string): string {
   try {
