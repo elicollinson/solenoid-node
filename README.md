@@ -33,7 +33,7 @@ See [Development](#development) section below for building from source with Poet
 - **Web Research**: Brave Search integration for real-time web queries
 - **MCP Support**: Model Context Protocol for extensible tool integration (stdio and HTTP servers)
 - **Local Memory System**: SQLite + FTS5 + sqlite-vec for hybrid semantic/keyword search with BGE reranking
-- **Configurable Models**: Support for Ollama models via LiteLLM with automatic model pulling
+- **Configurable Models**: Support for Gemini (default) and Ollama models via Google ADK
 - **Customizable Prompts**: All agent prompts configurable via YAML
 - **In-App Settings Editor**: Edit configuration via `/settings` command with YAML validation
 - **Slash Commands**: Extensible command system for quick actions (`/settings`, `/help`, `/clear`)
@@ -178,31 +178,54 @@ All configuration is managed through `app_settings.yaml` in the project root.
 
 ### Model Configuration
 
+Solenoid supports multiple model providers. Gemini is the default and requires no local infrastructure.
+
+#### Gemini (Default)
+
+Set your API key as an environment variable:
+
+```bash
+export GOOGLE_GENAI_API_KEY="your-api-key"
+# or alternatively:
+export GEMINI_API_KEY="your-api-key"
+```
+
+```yaml
+models:
+  default:
+    name: "gemini-3-flash-preview"
+    provider: "gemini"
+    context_length: 128000
+```
+
+#### Ollama (Local Inference)
+
+For fully local inference using [Ollama](https://ollama.com/):
+
 ```yaml
 models:
   default:
     name: "ministral-3:8b"
     provider: "ollama_chat"
     context_length: 128000
-  agent:
-    name: "ministral-3:8b"
-    context_length: 128000
-  extractor:
-    name: "ministral-3:8b"
 ```
 
-**Model Roles:**
+If a configured Ollama model is not found locally, the application automatically attempts to pull it. Uses model names from the [Ollama library](https://ollama.com/library).
+
+#### Model Roles
+
 - `default`: Fallback model for unspecified roles
 - `agent`: Used by all agent roles (requires function calling support)
 - `extractor`: Used for memory extraction
 
-**Model Requirements:**
-- Models used for the `agent` role must support **function calling** (tool use)
-- Recommended: `ministral-3:8b`, `qwen3:8b`, `llama3.1`, or similar function-calling capable models
-- Uses Ollama model names from the [Ollama library](https://ollama.com/library)
+#### Supported Providers
 
-**Automatic Model Pulling:**
-If a configured model is not found in your local Ollama instance, the application automatically attempts to pull it when the agent starts.
+| Provider | Config Value | Notes |
+|----------|-------------|-------|
+| Gemini | `gemini` | Default. Requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY` env var |
+| Ollama | `ollama_chat` | Local inference. Requires running Ollama server |
+
+Models used for the `agent` role must support **function calling** (tool use).
 
 ### Search Configuration
 
@@ -518,7 +541,7 @@ The executable will be created at `dist/solenoid`. This binary replicates the be
 
 - Python 3.11+
 - Poetry (for dependency management)
-- Ollama (for local LLM inference)
+- Ollama (only required for `ollama_chat` provider)
 
 ### Key Dependencies
 

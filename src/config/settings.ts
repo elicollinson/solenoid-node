@@ -28,27 +28,10 @@ let cachedSettings: AppSettings | null = null;
 let cachedRawSettings: Record<string, unknown> | null = null;
 let settingsPath: string | null = null;
 
-export function findSettingsFile(startDir: string = process.cwd()): string | null {
-  let dir = startDir;
-  const root = resolve('/');
-
-  while (dir !== root) {
-    const candidate = resolve(dir, DEFAULT_SETTINGS_FILENAME);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-    dir = dirname(dir);
-  }
-
-  const rootCandidate = resolve(root, DEFAULT_SETTINGS_FILENAME);
-  if (existsSync(rootCandidate)) {
-    return rootCandidate;
-  }
-
-  // Check ~/.solenoid/ as final fallback
-  const solenoidCandidate = resolve(homedir(), SOLENOID_CONFIG_DIR, DEFAULT_SETTINGS_FILENAME);
-  if (existsSync(solenoidCandidate)) {
-    return solenoidCandidate;
+export function findSettingsFile(): string | null {
+  const configPath = resolve(homedir(), SOLENOID_CONFIG_DIR, DEFAULT_SETTINGS_FILENAME);
+  if (existsSync(configPath)) {
+    return configPath;
   }
 
   return null;

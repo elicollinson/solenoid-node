@@ -102,6 +102,15 @@ try {
 }
 
 const modelName = settings ? getAdkModelName('planning_agent', settings) : 'gemini-2.5-flash';
+agentLogger.info(`[Planning] Resolved model: ${modelName}, provider: ${settings?.models?.default?.provider ?? 'unknown'}`);
+
+if (settings?.models?.default?.provider === 'gemini') {
+  const hasKey = !!(process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY);
+  agentLogger.info(`[Planning] Gemini API key present: ${hasKey}`);
+  if (!hasKey) {
+    agentLogger.warn('[Planning] No Gemini API key found. Set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY');
+  }
+}
 
 const customPrompt = settings ? getAgentPrompt('planning_agent', settings) : undefined;
 

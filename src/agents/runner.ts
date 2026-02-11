@@ -167,7 +167,9 @@ export async function* runAgent(
           yield { type: 'done' };
           return;
         }
-        agentLogger.debug('[Runner] Skipping empty final event, continuing...');
+        agentLogger.warn(
+          `[Runner] Empty final event from ${event.author} — model may have failed silently (auth error? invalid model name?). Event: ${JSON.stringify({ id: event.id, role: event.content?.role, parts: event.content?.parts?.length ?? 0, actions: event.actions })}`
+        );
       }
     }
 
