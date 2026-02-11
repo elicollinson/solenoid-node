@@ -64,6 +64,49 @@ describe('Config Schema', () => {
     });
   });
 
+  describe('ollama_host', () => {
+    it('should accept a valid URL', () => {
+      const settings = {
+        ollama_host: 'http://remote:11434',
+        models: {
+          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
+        },
+      };
+
+      const result = AppSettingsSchema.safeParse(settings);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ollama_host).toBe('http://remote:11434');
+      }
+    });
+
+    it('should be optional (missing is valid)', () => {
+      const settings = {
+        models: {
+          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
+        },
+      };
+
+      const result = AppSettingsSchema.safeParse(settings);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ollama_host).toBeUndefined();
+      }
+    });
+
+    it('should reject an invalid URL', () => {
+      const settings = {
+        ollama_host: 'not-a-url',
+        models: {
+          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
+        },
+      };
+
+      const result = AppSettingsSchema.safeParse(settings);
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('AppSettingsSchema', () => {
     it('should validate complete app settings', () => {
       const settings = {

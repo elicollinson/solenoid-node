@@ -34,7 +34,7 @@ export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
   { envVar: 'BRAVE_SEARCH_API_KEY', settingsPath: ['search', 'brave_search_api_key'] },
   { envVar: 'GOOGLE_API_KEY', settingsPath: ['search', 'google_api_key'] },
   { envVar: 'GOOGLE_CX', settingsPath: ['search', 'google_cx'] },
-  { envVar: 'OLLAMA_HOST', settingsPath: ['embeddings', 'host'] },
+  { envVar: 'OLLAMA_HOST', settingsPath: ['ollama_host'] },
 ];
 
 /**
@@ -42,6 +42,7 @@ export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
  */
 export function getDefaultSettings(): AppSettings {
   return {
+    ollama_host: 'http://localhost:11434',
     embeddings: {
       provider: 'ollama',
       host: 'http://localhost:11434',

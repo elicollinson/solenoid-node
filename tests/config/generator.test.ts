@@ -50,6 +50,7 @@ describe('Config Generator', () => {
     it('should return valid default settings structure', () => {
       const settings = getDefaultSettings();
 
+      expect(settings).toHaveProperty('ollama_host');
       expect(settings).toHaveProperty('embeddings');
       expect(settings).toHaveProperty('models');
       expect(settings).toHaveProperty('search');
@@ -113,7 +114,7 @@ describe('Config Generator', () => {
       const settings = generateSettings();
 
       expect(settings.search.brave_search_api_key).toBe('');
-      expect(settings.embeddings.host).toBe('http://localhost:11434');
+      expect(settings.ollama_host).toBe('http://localhost:11434');
     });
 
     it('should inject BRAVE_SEARCH_API_KEY from env', () => {
@@ -129,7 +130,7 @@ describe('Config Generator', () => {
 
       const settings = generateSettings();
 
-      expect(settings.embeddings.host).toBe('http://custom-ollama:11434');
+      expect(settings.ollama_host).toBe('http://custom-ollama:11434');
     });
 
     it('should inject multiple env vars', () => {
@@ -143,7 +144,7 @@ describe('Config Generator', () => {
       expect(settings.search.brave_search_api_key).toBe('brave-key');
       expect(settings.search.google_api_key).toBe('google-key');
       expect(settings.search.google_cx).toBe('google-cx-id');
-      expect(settings.embeddings.host).toBe('http://remote:11434');
+      expect(settings.ollama_host).toBe('http://remote:11434');
     });
 
     it('should merge with baseSettings', () => {

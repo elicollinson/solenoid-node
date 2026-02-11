@@ -73,6 +73,9 @@ sectionValidators.set('embeddings', createZodValidator(EmbeddingsConfigSchema));
 // MCP servers validator - record of server configs
 sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), McpServerSchema)));
 
+// Ollama host validator - URL string
+sectionValidators.set('ollama_host', createZodValidator(z.string().url()));
+
 // Agent prompts validator - record of strings with min length
 sectionValidators.set(
   'agent_prompts',

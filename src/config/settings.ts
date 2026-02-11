@@ -9,6 +9,7 @@
  * - yaml: YAML parser for reading configuration files
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
@@ -18,8 +19,10 @@ import {
   AppSettingsSchema,
   type ModelConfig,
 } from './schema.js';
+import { writeSettingsFile } from './generator.js';
 
 const DEFAULT_SETTINGS_FILENAME = 'app_settings.yaml';
+const SOLENOID_CONFIG_DIR = '.solenoid';
 
 let cachedSettings: AppSettings | null = null;
 let cachedRawSettings: Record<string, unknown> | null = null;
@@ -27,7 +30,7 @@ let settingsPath: string | null = null;
 
 export function findSettingsFile(startDir: string = process.cwd()): string | null {
   let dir = startDir;
-  const root = dirname(dir);
+  const root = resolve('/');
 
   while (dir !== root) {
     const candidate = resolve(dir, DEFAULT_SETTINGS_FILENAME);
@@ -42,7 +45,25 @@ export function findSettingsFile(startDir: string = process.cwd()): string | nul
     return rootCandidate;
   }
 
+  // Check ~/.solenoid/ as final fallback
+  const solenoidCandidate = resolve(homedir(), SOLENOID_CONFIG_DIR, DEFAULT_SETTINGS_FILENAME);
+  if (existsSync(solenoidCandidate)) {
+    return solenoidCandidate;
+  }
+
   return null;
+}
+
+export function ensureSettingsFile(): string | null {
+  const existing = findSettingsFile();
+  if (existing) return existing;
+
+  const configPath = resolve(homedir(), SOLENOID_CONFIG_DIR, DEFAULT_SETTINGS_FILENAME);
+  try {
+    return writeSettingsFile({ outputPath: configPath, overwrite: false });
+  } catch {
+    return null;
+  }
 }
 
 export function loadSettings(path?: string): AppSettings {
@@ -196,7 +217,7 @@ export function getAdkModelName(agentName: AgentName, settings?: AppSettings): s
 
 /**
  * Get the Ollama host URL from configuration or environment.
- * Priority: OLLAMA_HOST env var > embeddings.host config > default
+ * Priority: OLLAMA_HOST env var > ollama_host config > embeddings.host config > default
  *
  * @param settings - Optional settings object (will load if not provided)
  * @returns Ollama host URL
@@ -210,6 +231,13 @@ export function getOllamaHost(settings?: AppSettings): string {
   // Try to load from config
   try {
     const config = settings ?? loadSettings();
+
+    // Top-level ollama_host field
+    if (config.ollama_host) {
+      return config.ollama_host;
+    }
+
+    // Backwards compat: embeddings.host
     return config.embeddings.host;
   } catch {
     // Default fallback

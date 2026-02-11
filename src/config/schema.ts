@@ -54,6 +54,7 @@ export const McpServerSchema = z.union([McpStdioServerSchema, McpHttpServerSchem
 export const AgentPromptsSchema = z.record(z.string(), z.string());
 
 export const AppSettingsSchema = z.object({
+  ollama_host: z.string().url().optional(),
   embeddings: EmbeddingsConfigSchema.default({}),
   models: ModelsConfigSchema,
   search: SearchConfigSchema.default({}),

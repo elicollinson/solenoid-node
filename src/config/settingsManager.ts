@@ -11,6 +11,7 @@ export interface SectionInfo {
 
 // Known section metadata (for display only)
 const KNOWN_SECTIONS: Record<string, { displayName: string; description: string }> = {
+  ollama_host: { displayName: 'Ollama Host', description: 'Ollama server URL' },
   models: { displayName: 'Models', description: 'Model configurations' },
   search: { displayName: 'Search', description: 'Web search provider' },
   mcp_servers: { displayName: 'MCP Servers', description: 'MCP server connections' },
