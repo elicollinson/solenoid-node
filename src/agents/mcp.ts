@@ -21,6 +21,7 @@ import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.j
 import { getMcpManager } from '../mcp/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { createMcpAdkTools } from '../tools/mcp-adk-adapter.js';
+import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
 const DEFAULT_INSTRUCTION = `You are an MCP tools specialist. You MUST use the tools provided to you.
 
@@ -49,7 +50,10 @@ After calling tools and getting results, format your response as:
 [Summarize what you found from the tool calls]
 
 ## Status
-Success / Partial / Could Not Complete`;
+Success / Partial / Could Not Complete
+
+### CONSTRAINTS
+${TRANSFER_BACK_INSTRUCTION}`;
 
 // Load settings with fallback
 let settings: AppSettings | null;

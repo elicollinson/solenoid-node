@@ -85,8 +85,13 @@ interface RunAsyncParams {
   newMessage: { role: string; parts: Array<{ text: string }> };
 }
 
+/**
+ * Create a mock runner whose `onRunAsync` callback can either return events
+ * to yield or throw an error (simulating ADK crashing during iteration).
+ * Throws propagate from inside the async generator so the runner's
+ * try/catch handles them the same way ADK errors surface in production.
+ */
 function createMockRunner(
-  /** Called each time runAsync is invoked; return events to yield. */
   onRunAsync: (params: RunAsyncParams, callIndex: number) => Array<ReturnType<typeof makeEvent>>
 ) {
   let callIndex = 0;
@@ -97,8 +102,9 @@ function createMockRunner(
       createSession: mock(async () => ({ id: 'test-session' })),
     },
     runAsync(params: RunAsyncParams) {
-      const events = onRunAsync(params, callIndex++);
+      const idx = callIndex++;
       return (async function* () {
+        const events = onRunAsync(params, idx);
         for (const event of events) {
           yield event;
         }
@@ -257,7 +263,10 @@ describe('Runner retry on empty model response', () => {
     const chunks = await collectChunks(runAgent('delegate', runner, 'sess-6'));
 
     expect(runAsyncCallCount).toBe(1); // No retry — transfer counts as content
-    expect(chunks).toEqual([{ type: 'done' }]);
+    expect(chunks).toEqual([
+      { type: 'transfer', transferTo: 'research_agent' },
+      { type: 'done' },
+    ]);
   });
 
   it('yields tool_call chunks before retrying on empty final', async () => {
@@ -294,17 +303,22 @@ describe('Runner retry on empty model response', () => {
     expect(chunks[3]).toEqual({ type: 'done' });
   });
 
-  it('handles exceptions during runAsync gracefully', async () => {
-    const runner = createMockRunner(() => {
-      throw new Error('Network timeout');
+  it('handles exceptions during runAsync with retry', async () => {
+    let callCount = 0;
+    const runner = createMockRunner((_params, callIndex) => {
+      callCount++;
+      if (callIndex === 0) {
+        throw new Error('Network timeout');
+      }
+      return [makeFinalTextEvent('Recovered after error')];
     });
 
     const chunks = await collectChunks(runAgent('crash', runner, 'sess-8'));
 
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0].type).toBe('text');
-    expect(chunks[0].content).toContain('Network timeout');
-    expect(chunks[1].type).toBe('done');
+    expect(callCount).toBe(2);
+    const textChunks = chunks.filter((c) => c.type === 'text');
+    expect(textChunks).toEqual([{ type: 'text', content: 'Recovered after error' }]);
+    expect(chunks[chunks.length - 1].type).toBe('done');
   });
 
   it('retries multiple times before succeeding', async () => {
@@ -374,5 +388,108 @@ describe('Runner retry on empty model response', () => {
     expect(statusChunks[0].content).toContain('1/5');
     expect(statusChunks[1].content).toContain('2/5');
     expect(statusChunks[2].content).toContain('3/5');
+  });
+
+  // --- New tests for error resilience and transfer handling ---
+
+  it('recovers on retry after transfer error', async () => {
+    let callCount = 0;
+    const runner = createMockRunner((_params, callIndex) => {
+      callCount++;
+      if (callIndex === 0) {
+        throw new Error('Transfer failed');
+      }
+      return [makeFinalTextEvent('Success after transfer error')];
+    });
+
+    const chunks = await collectChunks(runAgent('delegate task', runner, 'sess-11'));
+
+    expect(callCount).toBe(2);
+    const textChunks = chunks.filter((c) => c.type === 'text');
+    expect(textChunks).toEqual([{ type: 'text', content: 'Success after transfer error' }]);
+    expect(chunks[chunks.length - 1].type).toBe('done');
+  });
+
+  it('sends error context in retry message after exception', async () => {
+    const messages: string[] = [];
+    const runner = createMockRunner((params, callIndex) => {
+      messages.push(params.newMessage.parts[0].text);
+      if (callIndex === 0) {
+        throw new Error('JSON.parse failed on model response');
+      }
+      return [makeFinalTextEvent('OK')];
+    });
+
+    await collectChunks(runAgent('trigger error', runner, 'sess-12'));
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toContain('JSON.parse failed on model response');
+    expect(messages[1]).toContain('alternative approach');
+  });
+
+  it('serializes non-standard error objects properly', async () => {
+    let callCount = 0;
+    const runner = createMockRunner((_params, callIndex) => {
+      callCount++;
+      if (callIndex === 0) {
+        // Simulate ADK's non-standard error: a plain object with properties
+        const err = Object.create(null);
+        err.code = 'TRANSFER_FAIL';
+        err.detail = 'agent not found';
+        throw err;
+      }
+      return [makeFinalTextEvent('Recovered')];
+    });
+
+    const chunks = await collectChunks(runAgent('odd error', runner, 'sess-13'));
+
+    expect(callCount).toBe(2);
+    // Should have recovered, and the status message should contain serialized error info
+    const statusChunks = chunks.filter((c) => c.type === 'status');
+    expect(statusChunks.length).toBeGreaterThanOrEqual(1);
+    // The error should NOT appear as just "empty response" — it should contain the error details
+    expect(statusChunks[0].content).toContain('TRANSFER_FAIL');
+  });
+
+  it('recovers after multiple sequential exceptions', async () => {
+    let callCount = 0;
+    const runner = createMockRunner((_params, callIndex) => {
+      callCount++;
+      if (callIndex < 3) {
+        throw new Error(`Failure #${callIndex + 1}`);
+      }
+      return [makeFinalTextEvent('Finally recovered')];
+    });
+
+    const chunks = await collectChunks(runAgent('multiple failures', runner, 'sess-14'));
+
+    expect(callCount).toBe(4); // 3 failures + 1 success
+    const textChunks = chunks.filter((c) => c.type === 'text');
+    expect(textChunks).toEqual([{ type: 'text', content: 'Finally recovered' }]);
+    expect(chunks[chunks.length - 1].type).toBe('done');
+  });
+
+  it('yields transfer chunks when transfer events are detected', async () => {
+    const runner = createMockRunner(() => [
+      // A transfer event followed by a final text event
+      makeEvent({
+        author: 'planning_agent',
+        parts: [],
+        actions: {
+          stateDelta: {},
+          artifactDelta: {},
+          requestedAuthConfigs: {},
+          requestedToolConfirmations: {},
+          transferToAgent: 'research_agent',
+        },
+      }),
+      makeFinalTextEvent('Research complete'),
+    ]);
+
+    const chunks = await collectChunks(runAgent('search for info', runner, 'sess-15'));
+
+    const transferChunks = chunks.filter((c) => c.type === 'transfer');
+    expect(transferChunks).toHaveLength(1);
+    expect(transferChunks[0].transferTo).toBe('research_agent');
   });
 });

@@ -25,6 +25,29 @@ import type { AgentStreamChunk } from './types.js';
 const APP_NAME = 'Solenoid';
 
 /**
+ * Serialize any error value into a readable string.
+ * ADK sometimes throws non-standard error objects (e.g. `{}`) that lose
+ * information with naive stringification.
+ */
+function serializeError(error: unknown): string {
+  if (error instanceof Error) return error.message || error.constructor.name;
+  if (typeof error === 'string') return error;
+  try {
+    const str = String(error);
+    if (str !== '[object Object]') return str;
+  } catch {
+    // fall through
+  }
+  try {
+    const json = JSON.stringify(error);
+    if (json && json !== '{}') return json;
+  } catch {
+    // fall through
+  }
+  return 'Unknown error (non-serializable)';
+}
+
+/**
  * Debug: Log the agent hierarchy
  */
 export function logAgentHierarchy(agent: LlmAgent, indent = 0) {
@@ -101,24 +124,34 @@ export async function* runAgent(
     return lastErrorMessage ?? lastErrorCode ?? 'empty response';
   }
 
-  try {
-    while (attempt <= MAX_RETRIES && !gotFinalContent) {
-      if (attempt > 0) {
-        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s, 16s
-        const reason = retryReason();
-        agentLogger.info(
-          `[Runner] Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${reason}`
-        );
-        yield {
-          type: 'status',
-          content: `Retrying (${attempt}/${MAX_RETRIES}): ${reason}`,
-        };
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
+  while (attempt <= MAX_RETRIES && !gotFinalContent) {
+    if (attempt > 0) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s, 16s
+      const reason = retryReason();
+      agentLogger.info(
+        `[Runner] Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${reason}`
+      );
+      yield {
+        type: 'status',
+        content: `Retrying (${attempt}/${MAX_RETRIES}): ${reason}`,
+      };
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
 
-      const message =
-        attempt === 0 ? userMessage : createUserContent('Please continue with your response.');
+    let message: Content;
+    if (attempt === 0) {
+      message = userMessage;
+    } else if (lastErrorMessage && !lastErrorCode) {
+      // Exception occurred (no ADK error code) — give the model error context
+      message = createUserContent(
+        `The previous attempt encountered an error: ${lastErrorMessage}. Please try an alternative approach or a different agent.`
+      );
+    } else {
+      // Empty response or ADK error code — nudge the model to continue
+      message = createUserContent('Please continue with your response.');
+    }
 
+    try {
       let eventIndex = 0;
       for await (const event of runner.runAsync({
         userId: 'default_user',
@@ -132,9 +165,10 @@ export async function* runAgent(
         );
 
         if (event.actions?.transferToAgent) {
-          agentLogger.debug(
-            `[Runner] *** TRANSFER DETECTED: ${event.author} -> ${event.actions.transferToAgent} ***`
+          agentLogger.info(
+            `[Runner] *** TRANSFER: ${event.author} -> ${event.actions.transferToAgent} ***`
           );
+          yield { type: 'transfer', transferTo: event.actions.transferToAgent };
         }
 
         const partTypes =
@@ -199,26 +233,27 @@ export async function* runAgent(
           break;
         }
       }
-
-      if (!gotFinalContent) {
-        attempt++;
-      }
+    } catch (error) {
+      const serialized = serializeError(error);
+      lastErrorMessage = serialized;
+      lastErrorCode = undefined;
+      agentLogger.error(
+        { errorType: error?.constructor?.name, attempt: attempt + 1, message: serialized },
+        '[Runner] Exception during runAsync — will retry'
+      );
     }
 
     if (!gotFinalContent) {
-      const reason = retryReason();
-      agentLogger.error(`[Runner] All ${MAX_RETRIES + 1} attempts exhausted — ${reason}`);
-      yield {
-        type: 'text',
-        content: `The model failed after ${MAX_RETRIES + 1} attempts: ${reason}`,
-      };
-      yield { type: 'done' };
+      attempt++;
     }
-  } catch (error) {
-    agentLogger.error({ error }, '[Runner] Error during agent execution');
+  }
+
+  if (!gotFinalContent) {
+    const reason = retryReason();
+    agentLogger.error(`[Runner] All ${MAX_RETRIES + 1} attempts exhausted — ${reason}`);
     yield {
       type: 'text',
-      content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+      content: `The model failed after ${MAX_RETRIES + 1} attempts: ${reason}`,
     };
     yield { type: 'done' };
   }

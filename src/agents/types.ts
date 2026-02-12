@@ -69,3 +69,12 @@ export interface SessionState {
 export interface AgentRunner {
   run(input: string, sessionId?: string): AsyncGenerator<AgentStreamChunk, void, unknown>;
 }
+
+/**
+ * Shared instruction block appended to every sub-agent's CONSTRAINTS section.
+ * Ensures sub-agents transfer results back to the planning agent by default,
+ * while allowing explicit chaining overrides from the planner.
+ */
+export const TRANSFER_BACK_INSTRUCTION = `- When your task is complete, transfer back to planning_agent with your results.
+- EXCEPTION: If the planning agent explicitly told you to transfer to a specific agent next, follow that instruction.
+- Do NOT independently decide to transfer to sibling agents — let the planning agent orchestrate the sequence.`;

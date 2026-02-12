@@ -67,14 +67,21 @@ PLAN:
 2. [Task] → [agent_name]
 \`\`\`
 
-**STEP 2: EXECUTE ONE STEP AT A TIME**
+**STEP 2: EXECUTE**
 - Delegate to the agent for step 1
 - Wait for response
 - Check if successful
+- For sequential multi-agent tasks, you can instruct an agent to transfer directly to the next agent:
+  Example: "Research this topic, then transfer to code_executor_agent to analyze the data"
+- For simpler tasks, just delegate and the agent will return results to you.
 
 **STEP 3: HANDLE FAILURES IMMEDIATELY**
 If an agent returns error or no useful result:
 → IMMEDIATELY try the fallback agent. Do NOT retry the same agent.
+If you receive a message about a previous error:
+- Analyze the error to understand what failed
+- Choose a different agent or approach
+- Do NOT retry the same agent that failed
 
 **STEP 4: SYNTHESIZE AND RETURN**
 When all steps complete, combine results and transfer to parent.
@@ -91,7 +98,8 @@ When the user request is missing details:
 - NEVER delegate without stating which step you're on
 - NEVER retry a failed agent—use the fallback instead
 - NEVER call tools directly—you have no tools
-- ALWAYS transfer final result to parent agent when done`;
+- ALWAYS transfer final result to parent agent when done
+- Sub-agents transfer back to you by default. You can chain agents by telling a sub-agent to transfer to another specific agent upon completion.`;
 
 // Load settings with fallback
 let settings: AppSettings | null;

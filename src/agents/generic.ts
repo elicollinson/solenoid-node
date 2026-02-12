@@ -18,6 +18,7 @@ import { LlmAgent } from '@google/adk';
 import type { AppSettings } from '../config/index.js';
 import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
+import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
 const DEFAULT_INSTRUCTION = `You are the Generic Executor Agent, handling knowledge tasks.
 
@@ -41,8 +42,8 @@ You handle general-purpose tasks. You are the "knowledge worker" for text-based 
 
 ### CONSTRAINTS
 - ALWAYS provide helpful, accurate responses
-- ALWAYS transfer your result to your parent agent upon completion
-- If asked to do something outside your capabilities, clearly state what agent should be used instead`;
+- If asked to do something outside your capabilities, clearly state what agent should be used instead
+${TRANSFER_BACK_INSTRUCTION}`;
 
 // Load settings with fallback
 let settings: AppSettings | null;

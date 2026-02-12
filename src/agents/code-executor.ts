@@ -21,6 +21,7 @@ import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.j
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { executeCodeAdkTool } from '../tools/adk-tools.js';
 import { executeCode } from '../tools/code-execution.js';
+import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
 // Re-export executeCode for backward compatibility
 export { executeCode };
@@ -67,7 +68,8 @@ Python standard library including:
 ### CONSTRAINTS
 - NEVER execute code that could be harmful
 - NEVER attempt file system operations outside the sandbox
-- ALWAYS use print() to output results`;
+- ALWAYS use print() to output results
+${TRANSFER_BACK_INSTRUCTION}`;
 
 // Load settings with fallback
 let settings: AppSettings | null;

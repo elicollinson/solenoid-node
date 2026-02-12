@@ -25,6 +25,7 @@ import { z } from 'zod';
 import { parseChartArgs } from '../charts/index.js';
 import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
+import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
 const DEFAULT_INSTRUCTION = `You are a Chart Generator Agent specializing in terminal-based data visualizations.
 
@@ -107,7 +108,8 @@ Use these color names: "red", "green", "blue", "yellow", "cyan", "magenta", "whi
 - Choose the most appropriate chart type for the data
 - Use descriptive titles that explain what the chart shows
 - Use colors to distinguish different data series or categories
-- Keep labels concise but meaningful`;
+- Keep labels concise but meaningful
+${TRANSFER_BACK_INSTRUCTION}`;
 
 /**
  * Google ADK FunctionTool for chart rendering.

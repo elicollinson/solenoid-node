@@ -18,6 +18,7 @@ import type { AppSettings } from '../config/index.js';
 import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { braveSearchAdkTool, readWebpageAdkTool } from '../tools/adk-tools.js';
+import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
 const DEFAULT_INSTRUCTION = `You are the Research Specialist, an expert in gathering comprehensive information from the web.
 
@@ -65,7 +66,8 @@ Structure your research report as:
 - NEVER fabricate information or URLs.
 - NEVER present speculation as fact.
 - ALWAYS cite sources for factual claims.
-- Maximum 5 page reads per research task.`;
+- Maximum 5 page reads per research task.
+${TRANSFER_BACK_INSTRUCTION}`;
 
 // Load settings with fallback
 let settings: AppSettings | null;
