@@ -7,6 +7,9 @@
  */
 import { loadSettings } from '../config/index.js';
 import type { ToolDefinition } from '../llm/types.js';
+import { fetchWithTimeout } from '../utils/fetch.js';
+
+const SEARCH_TIMEOUT_MS = 15_000;
 
 export async function braveSearch(query: string): Promise<string> {
   const apiKey = getApiKey();
@@ -19,14 +22,17 @@ export async function braveSearch(query: string): Promise<string> {
   url.searchParams.set('count', '10');
 
   try {
-    // TODO(stability): fetch() has no timeout/AbortSignal — long requests will hang indefinitely
-    const response = await fetch(url.toString(), {
-      headers: {
-        Accept: 'application/json',
-        'Accept-Encoding': 'gzip',
-        'X-Subscription-Token': apiKey,
+    const response = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': apiKey,
+        },
       },
-    });
+      SEARCH_TIMEOUT_MS
+    );
 
     if (!response.ok) {
       return `Error: Search API returned ${response.status}`;
@@ -51,6 +57,9 @@ export async function braveSearch(query: string): Promise<string> {
 
     return summary.join('\n\n');
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return 'Error performing search: Request timed out';
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return `Error performing search: ${message}`;
   }

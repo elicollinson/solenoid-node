@@ -6,13 +6,13 @@
  * characters to stay within LLM context limits.
  */
 import type { ToolDefinition } from '../llm/types.js';
+import { fetchWithTimeout } from '../utils/fetch.js';
 
 const MAX_CONTENT_LENGTH = 10000;
 
 export async function readWebpage(url: string): Promise<string> {
   try {
-    // TODO(stability): fetch() has no timeout/AbortSignal — long requests will hang indefinitely
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Solenoid/2.0; +https://github.com/solenoid)',
       },
@@ -31,6 +31,9 @@ export async function readWebpage(url: string): Promise<string> {
 
     return text;
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return `Error reading ${url}: Request timed out`;
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return `Error reading ${url}: ${message}`;
   }

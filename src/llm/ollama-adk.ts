@@ -16,8 +16,7 @@
  * - ollama: Native Ollama client for local LLM inference
  */
 import { BaseLlm, LLMRegistry } from '@google/adk';
-import type { BaseLlmConnection, LlmRequest, LlmResponse } from '@google/adk';
-import type { BaseTool } from '@google/adk';
+import type { BaseLlmConnection, BaseTool, LlmRequest, LlmResponse } from '@google/adk';
 import type { Content, FunctionCall, FunctionResponse, Part } from '@google/genai';
 import { Ollama } from 'ollama';
 import type {
@@ -28,6 +27,9 @@ import type {
 } from 'ollama';
 import { getOllamaHost } from '../config/settings.js';
 import { agentLogger } from '../utils/logger.js';
+
+/** Maximum time to wait for an Ollama response before aborting (ms) */
+const OLLAMA_TIMEOUT_MS = 120_000; // 2 minutes — generous for cold model loading
 
 /**
  * Ollama LLM implementation for Google ADK.
@@ -63,6 +65,26 @@ export class OllamaLlm extends BaseLlm {
   }
 
   /**
+   * Wraps a promise with a timeout. Calls this.client.abort() on timeout
+   * to cancel any in-flight Ollama requests.
+   */
+  private async withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        this.client.abort();
+        reject(new Error(`Ollama ${label} timed out after ${OLLAMA_TIMEOUT_MS}ms`));
+      }, OLLAMA_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId!);
+    }
+  }
+
+  /**
    * Generates content asynchronously from the Ollama model.
    *
    * Converts ADK LlmRequest format to Ollama format, sends the request,
@@ -92,69 +114,49 @@ export class OllamaLlm extends BaseLlm {
         }
       }
 
+      const toolNames = tools.map((t) => t.function.name).join(', ') || 'none';
       agentLogger.debug(
-        `[OllamaLlm] Calling model: ${this.actualModel}, messages: ${messages.length}, tools: ${tools.length}, stream: ${stream}`
-      );
-      agentLogger.debug(
-        `[OllamaLlm] Available tools: ${tools.map((t) => t.function.name).join(', ') || 'none'}`
+        `[OllamaLlm] Calling ${this.actualModel}, messages: ${messages.length}, tools: [${toolNames}], stream: ${stream}`
       );
 
       if (stream) {
         // Streaming mode
-        // TODO(stability): Ollama client call has no timeout — will hang if Ollama is unresponsive
-        const response = await this.client.chat({
-          model: this.actualModel,
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
-          stream: true,
-        });
+        const response = await this.withTimeout(
+          this.client.chat({
+            model: this.actualModel,
+            messages,
+            tools: tools.length > 0 ? tools : undefined,
+            stream: true,
+          }),
+          'streaming chat'
+        );
 
         for await (const chunk of response) {
           yield this.convertToLlmResponse(chunk, !chunk.done);
         }
       } else {
         // Non-streaming mode
-        // TODO(stability): Ollama client call has no timeout — will hang if Ollama is unresponsive
-        const response = await this.client.chat({
-          model: this.actualModel,
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
-          stream: false,
-        });
+        const response = await this.withTimeout(
+          this.client.chat({
+            model: this.actualModel,
+            messages,
+            tools: tools.length > 0 ? tools : undefined,
+            stream: false,
+          }),
+          'chat'
+        );
 
-        const toolCallCount = response.message.tool_calls?.length ?? 0;
+        const toolCalls = response.message.tool_calls ?? [];
         agentLogger.debug(
-          `[OllamaLlm] Response received, done: ${response.done}, content length: ${response.message.content?.length ?? 0}, tool_calls: ${toolCallCount}`
+          `[OllamaLlm] Response received, done: ${response.done}, content: ${response.message.content?.length ?? 0} chars, tool_calls: ${toolCalls.length}`
         );
-        if (response.message.tool_calls && response.message.tool_calls.length > 0) {
-          for (const tc of response.message.tool_calls) {
-            agentLogger.debug(`[OllamaLlm] Tool call from Ollama: ${tc.function.name}`);
-            agentLogger.debug(`[OllamaLlm] Tool call args type: ${typeof tc.function.arguments}`);
-            agentLogger.debug(
-              `[OllamaLlm] Tool call args keys: ${Object.keys(tc.function.arguments || {}).join(', ')}`
-            );
-            agentLogger.debug(
-              `[OllamaLlm] Tool call args full: ${JSON.stringify(tc.function.arguments)}`
-            );
-          }
+        for (const tc of toolCalls) {
+          agentLogger.debug(
+            `[OllamaLlm] Tool call: ${tc.function.name}(${JSON.stringify(tc.function.arguments)})`
+          );
         }
+
         const llmResponse = this.convertToLlmResponse(response, false);
-        agentLogger.debug(
-          `[OllamaLlm] Yielding response with ${llmResponse.content?.parts?.length} parts, turnComplete: ${llmResponse.turnComplete}`
-        );
-        // Log the parts in the response
-        if (llmResponse.content?.parts) {
-          for (const part of llmResponse.content.parts) {
-            if ('text' in part && part.text) {
-              agentLogger.debug(`[OllamaLlm] Part: text (${part.text.length} chars)`);
-            }
-            if ('functionCall' in part && part.functionCall) {
-              agentLogger.debug(
-                `[OllamaLlm] Part: functionCall: ${part.functionCall.name}, args: ${JSON.stringify(part.functionCall.args)}`
-              );
-            }
-          }
-        }
         yield llmResponse;
       }
     } catch (error) {
@@ -219,7 +221,7 @@ export class OllamaLlm extends BaseLlm {
       }
 
       // Handle model responses with tool calls
-      if ((content.role === 'model' || role === 'assistant') && this.hasFunctionCalls(content)) {
+      if (role === 'assistant' && this.hasFunctionCalls(content)) {
         const textContent = this.extractText(content);
         const toolCalls = this.extractToolCalls(content);
 
@@ -354,25 +356,18 @@ export class OllamaLlm extends BaseLlm {
    * @returns Array of Ollama Tool objects
    */
   private convertTools(toolsDict: { [key: string]: BaseTool }): OllamaTool[] {
-    if (!toolsDict || Object.keys(toolsDict).length === 0) {
-      agentLogger.debug('[OllamaLlm] No tools in toolsDict');
-      return [];
-    }
+    const entries = Object.entries(toolsDict ?? {});
+    if (entries.length === 0) return [];
 
-    agentLogger.debug(`[OllamaLlm] toolsDict keys: ${Object.keys(toolsDict).join(', ')}`);
     const tools: OllamaTool[] = [];
 
-    for (const [name, tool] of Object.entries(toolsDict)) {
+    for (const [name, tool] of entries) {
       const declaration = tool._getDeclaration?.();
       if (!declaration) {
         agentLogger.debug(`[OllamaLlm] Tool ${name} has no declaration, skipping`);
         continue;
       }
 
-      agentLogger.debug(`[OllamaLlm] Adding tool: ${declaration.name}`);
-      agentLogger.debug(
-        `[OllamaLlm] Tool ${declaration.name} parameters: ${JSON.stringify(declaration.parameters)}`
-      );
       tools.push({
         type: 'function',
         function: {
@@ -383,6 +378,7 @@ export class OllamaLlm extends BaseLlm {
       });
     }
 
+    agentLogger.debug(`[OllamaLlm] Converted ${tools.length} tools: ${tools.map((t) => t.function.name).join(', ')}`);
     return tools;
   }
 
@@ -395,24 +391,19 @@ export class OllamaLlm extends BaseLlm {
    */
   private convertToLlmResponse(response: OllamaChatResponse, partial: boolean): LlmResponse {
     const parts: Part[] = [];
+    const toolCalls = response.message.tool_calls ?? [];
 
-    // Add text content if present
     if (response.message.content) {
       parts.push({ text: response.message.content });
     }
 
-    // Add function calls if present
-    let hasToolCalls = false;
-    if (response.message.tool_calls && response.message.tool_calls.length > 0) {
-      hasToolCalls = true;
-      for (const toolCall of response.message.tool_calls) {
-        parts.push({
-          functionCall: {
-            name: toolCall.function.name,
-            args: toolCall.function.arguments,
-          },
-        });
-      }
+    for (const toolCall of toolCalls) {
+      parts.push({
+        functionCall: {
+          name: toolCall.function.name,
+          args: toolCall.function.arguments,
+        },
+      });
     }
 
     // Ensure we always have at least an empty text part
@@ -420,17 +411,11 @@ export class OllamaLlm extends BaseLlm {
       parts.push({ text: '' });
     }
 
-    const content: Content = {
-      role: 'model',
-      parts,
-    };
-
-    // When there are tool calls, turnComplete should be false so ADK continues processing
-    // Only mark turnComplete when there are no tool calls and Ollama says done
+    // When there are tool calls, turnComplete must be false so ADK continues processing
     return {
-      content,
+      content: { role: 'model', parts },
       partial,
-      turnComplete: response.done && !hasToolCalls,
+      turnComplete: response.done && toolCalls.length === 0,
     };
   }
 }

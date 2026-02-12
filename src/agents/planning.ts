@@ -17,27 +17,27 @@
  * - @google/adk: LlmAgent for ADK-compatible agent with subAgents
  */
 import { LlmAgent } from '@google/adk';
+
 import type { AppSettings } from '../config/index.js';
 import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
-
-/**
- * Minimal context interface matching ADK's ReadonlyContext
- * Used for instruction providers
- */
-interface InstructionContext {
-  state: {
-    get<T>(key: string, defaultValue?: T): T | undefined;
-  };
-}
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { agentLogger } from '../utils/logger.js';
 
 import { chartGeneratorAgent } from './chart-generator.js';
 import { codeExecutorAgent } from './code-executor.js';
 import { genericAgent } from './generic.js';
-import { createMcpAgent, mcpAgent } from './mcp.js';
-// Import specialist agents
+import { createMcpAgent } from './mcp.js';
 import { researchAgent } from './research.js';
+
+/**
+ * Minimal context interface matching ADK's ReadonlyContext.
+ * Used for dynamic instruction providers.
+ */
+interface InstructionContext {
+  state: {
+    get<T>(key: string, defaultValue?: T): T | undefined;
+  };
+}
 
 const DEFAULT_INSTRUCTION = `You are the Chief Planner. You coordinate a team of specialist agents to solve complex tasks.
 
@@ -141,9 +141,17 @@ export async function createPlanningAgent(additionalSubAgents: LlmAgent[] = []):
   try {
     initializedMcpAgent = await createMcpAgent();
   } catch (error) {
-    // TODO(stability): MCP fallback uses placeholder agent with no tools — user won't know delegation will fail
-    agentLogger.warn({ error }, 'MCP agent creation failed, using placeholder');
-    initializedMcpAgent = mcpAgent;
+    agentLogger.warn({ error }, 'MCP agent creation failed, using placeholder with warning');
+    initializedMcpAgent = new LlmAgent({
+      name: 'mcp_agent',
+      model: modelName,
+      description:
+        'MCP tools specialist — CURRENTLY UNAVAILABLE. MCP server connection failed during startup. Do not delegate tasks to this agent.',
+      instruction: `You are the MCP agent, but MCP tools failed to initialize. You have NO tools available.
+Immediately respond explaining that MCP tools are unavailable due to a startup connection failure, and suggest using a different agent or approach.
+Transfer back to planning_agent immediately.`,
+      tools: [],
+    });
   }
 
   const subAgents: LlmAgent[] = [

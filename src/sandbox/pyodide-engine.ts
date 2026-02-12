@@ -22,10 +22,9 @@ export interface ExecutionResult {
 
 export class PythonSandbox {
   private pyodide: PyodideInterface | null = null;
-  private initialized = false;
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    if (this.pyodide) return;
 
     try {
       const { loadPyodide } = await import('pyodide');
@@ -44,12 +43,9 @@ export class PythonSandbox {
         agentLogger.warn('Sandbox: Failed to install pygal');
       }
 
-      this.initialized = true;
       agentLogger.info('Sandbox: Pyodide initialized');
     } catch (error) {
-      agentLogger.warn({ error }, 'Sandbox: Pyodide not available');
-      // TODO(stability): Setting initialized = true on failure prevents any future retry
-      this.initialized = true;
+      agentLogger.warn({ error }, 'Sandbox: Pyodide not available — will retry on next call');
     }
   }
 
@@ -109,21 +105,20 @@ export class PythonSandbox {
   }
 
   private captureOutputFiles(contextFiles?: Record<string, string>): Record<string, string> {
-    if (!this.pyodide) return {};
-
+    const pyodide = this.pyodide!;
     const files: Record<string, string> = {};
     const contextFileNames = new Set(Object.keys(contextFiles ?? {}));
 
     try {
-      const entries = this.pyodide.FS.readdir('.');
+      const entries = pyodide.FS.readdir('.');
       for (const entry of entries) {
         if (entry === '.' || entry === '..') continue;
         if (contextFileNames.has(entry)) continue;
 
         try {
-          const stat = this.pyodide.FS.stat(entry);
-          if (this.pyodide.FS.isFile(stat.mode)) {
-            const content = this.pyodide.FS.readFile(entry, { encoding: 'utf8' });
+          const stat = pyodide.FS.stat(entry);
+          if (pyodide.FS.isFile(stat.mode)) {
+            const content = pyodide.FS.readFile(entry, { encoding: 'utf8' });
             files[entry] = content as string;
           }
         } catch {
