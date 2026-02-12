@@ -48,7 +48,8 @@ export class PythonSandbox {
       agentLogger.info('Sandbox: Pyodide initialized');
     } catch (error) {
       agentLogger.warn({ error }, 'Sandbox: Pyodide not available');
-      this.initialized = true; // Mark as initialized to prevent retry
+      // TODO(stability): Setting initialized = true on failure prevents any future retry
+      this.initialized = true;
     }
   }
 

@@ -11,6 +11,7 @@ const MAX_CONTENT_LENGTH = 10000;
 
 export async function readWebpage(url: string): Promise<string> {
   try {
+    // TODO(stability): fetch() has no timeout/AbortSignal — long requests will hang indefinitely
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Solenoid/2.0; +https://github.com/solenoid)',

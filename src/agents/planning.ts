@@ -133,6 +133,7 @@ export async function createPlanningAgent(additionalSubAgents: LlmAgent[] = []):
   try {
     initializedMcpAgent = await createMcpAgent();
   } catch (error) {
+    // TODO(stability): MCP fallback uses placeholder agent with no tools — user won't know delegation will fail
     agentLogger.warn({ error }, 'MCP agent creation failed, using placeholder');
     initializedMcpAgent = mcpAgent;
   }

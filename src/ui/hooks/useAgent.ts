@@ -1,15 +1,15 @@
-import type { InMemoryRunner } from '@google/adk';
 /**
  * useAgent Hook
  *
  * Provides direct ADK integration for the Ink UI using React 18 Suspense.
  * Uses a resource pattern to suspend until MCP tools are loaded.
  */
+import type { InMemoryRunner } from '@google/adk';
 import { useCallback, useRef } from 'react';
 import { createAdkAgentHierarchy, runAgent } from '../../agents/index.js';
 
 export interface AgentEvent {
-  type: 'text' | 'tool_start' | 'tool_args' | 'tool_end' | 'transfer' | 'done' | 'error';
+  type: 'text' | 'tool_start' | 'tool_args' | 'tool_end' | 'transfer' | 'status' | 'done' | 'error';
   content?: string;
   toolCallId?: string;
   toolName?: string;
@@ -93,6 +93,11 @@ export function useAgent() {
             case 'transfer':
               if (chunk.transferTo) {
                 yield { type: 'transfer', transferTo: chunk.transferTo };
+              }
+              break;
+            case 'status':
+              if (chunk.content) {
+                yield { type: 'status', content: chunk.content };
               }
               break;
             case 'done':

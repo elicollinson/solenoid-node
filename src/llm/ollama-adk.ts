@@ -101,6 +101,7 @@ export class OllamaLlm extends BaseLlm {
 
       if (stream) {
         // Streaming mode
+        // TODO(stability): Ollama client call has no timeout — will hang if Ollama is unresponsive
         const response = await this.client.chat({
           model: this.actualModel,
           messages,
@@ -113,6 +114,7 @@ export class OllamaLlm extends BaseLlm {
         }
       } else {
         // Non-streaming mode
+        // TODO(stability): Ollama client call has no timeout — will hang if Ollama is unresponsive
         const response = await this.client.chat({
           model: this.actualModel,
           messages,

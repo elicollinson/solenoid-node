@@ -72,109 +72,148 @@ export async function* runAgent(
   runner: InMemoryRunner,
   sessionId?: string
 ): AsyncGenerator<AgentStreamChunk, void, unknown> {
-  const activeRunner = runner;
   const sid = sessionId ?? crypto.randomUUID();
 
-  // Try to get existing session, or create a new one
-  let session = await activeRunner.sessionService.getSession({
+  let session = await runner.sessionService.getSession({
     appName: APP_NAME,
     userId: 'default_user',
     sessionId: sid,
   });
 
   if (!session) {
-    session = await activeRunner.sessionService.createSession({
+    session = await runner.sessionService.createSession({
       appName: APP_NAME,
       userId: 'default_user',
       sessionId: sid,
     });
   }
 
-  // Create user message
   const userMessage = createUserContent(input);
 
-  // Run the agent and stream responses
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 1000;
+  let attempt = 0;
+  let gotFinalContent = false;
+  let lastErrorCode: string | undefined;
+  let lastErrorMessage: string | undefined;
+
+  function retryReason(): string {
+    return lastErrorMessage ?? lastErrorCode ?? 'empty response';
+  }
+
   try {
-    let eventIndex = 0;
-    for await (const event of activeRunner.runAsync({
-      userId: 'default_user',
-      sessionId: sid,
-      newMessage: userMessage,
-    })) {
-      eventIndex++;
-      agentLogger.debug(`[Runner] ===== EVENT #${eventIndex} =====`);
-      agentLogger.debug(
-        `[Runner] Event ID: ${event.id}, from ${event.author}, parts: ${event.content?.parts?.length ?? 0}, role: ${event.content?.role}, isFinal: ${isFinalResponse(event)}, transferToAgent: ${event.actions?.transferToAgent ?? 'none'}`
-      );
+    while (attempt <= MAX_RETRIES && !gotFinalContent) {
+      if (attempt > 0) {
+        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s, 16s
+        const reason = retryReason();
+        agentLogger.info(
+          `[Runner] Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${reason}`
+        );
+        yield {
+          type: 'status',
+          content: `Retrying (${attempt}/${MAX_RETRIES}): ${reason}`,
+        };
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
 
-      // Highlight if this event has a transfer action
-      if (event.actions?.transferToAgent) {
+      const message =
+        attempt === 0 ? userMessage : createUserContent('Please continue with your response.');
+
+      let eventIndex = 0;
+      for await (const event of runner.runAsync({
+        userId: 'default_user',
+        sessionId: sid,
+        newMessage: message,
+      })) {
+        eventIndex++;
+        agentLogger.debug(`[Runner] ===== EVENT #${eventIndex} (attempt ${attempt + 1}) =====`);
         agentLogger.debug(
-          `[Runner] *** TRANSFER DETECTED: ${event.author} -> ${event.actions.transferToAgent} ***`
+          `[Runner] Event ID: ${event.id}, from ${event.author}, parts: ${event.content?.parts?.length ?? 0}, role: ${event.content?.role}, isFinal: ${isFinalResponse(event)}, transferToAgent: ${event.actions?.transferToAgent ?? 'none'}, errorCode: ${(event as any).errorCode ?? 'none'}, errorMessage: ${(event as any).errorMessage ?? 'none'}`
         );
-      }
 
-      // Log what type of parts this event has
-      const partTypes =
-        event.content?.parts
-          ?.map((p) => {
-            if ('text' in p && p.text) return 'text';
-            if ('functionCall' in p && p.functionCall) return `functionCall:${p.functionCall.name}`;
-            if ('functionResponse' in p && p.functionResponse)
-              return `functionResponse:${(p.functionResponse as { name?: string }).name}`;
-            return `unknown(${Object.keys(p).join(',')})`;
-          })
-          .join(', ') ?? 'no parts';
-      agentLogger.debug(`[Runner] Event parts: ${partTypes}`);
+        if (event.actions?.transferToAgent) {
+          agentLogger.debug(
+            `[Runner] *** TRANSFER DETECTED: ${event.author} -> ${event.actions.transferToAgent} ***`
+          );
+        }
 
-      // If this is a function response, log details
-      if (event.content?.parts?.some((p) => 'functionResponse' in p)) {
-        agentLogger.debug('[Runner] Function response event detected!');
-      }
+        const partTypes =
+          event.content?.parts
+            ?.map((p) => {
+              if ('text' in p && p.text) return 'text';
+              if ('functionCall' in p && p.functionCall)
+                return `functionCall:${p.functionCall.name}`;
+              if ('functionResponse' in p && p.functionResponse)
+                return `functionResponse:${(p.functionResponse as { name?: string }).name}`;
+              return `unknown(${Object.keys(p).join(',')})`;
+            })
+            .join(', ') ?? 'no parts';
+        agentLogger.debug(`[Runner] Event parts: ${partTypes}`);
 
-      // Extract text content from event
-      if (event.content?.parts) {
-        for (const part of event.content.parts) {
-          if (part.text) {
-            yield { type: 'text', content: part.text };
-          }
-          // Yield tool calls
-          if ('functionCall' in part && part.functionCall?.name) {
-            agentLogger.debug(
-              `[Runner] Tool call: ${part.functionCall.name}, args: ${JSON.stringify(part.functionCall.args)}`
-            );
-            yield {
-              type: 'tool_call',
-              toolCall: {
-                function: {
-                  name: part.functionCall.name,
-                  arguments: part.functionCall.args as Record<string, unknown>,
+        if (event.content?.parts?.some((p) => 'functionResponse' in p)) {
+          agentLogger.debug('[Runner] Function response event detected!');
+        }
+
+        if (event.content?.parts) {
+          for (const part of event.content.parts) {
+            if (part.text) {
+              yield { type: 'text', content: part.text };
+            }
+            if ('functionCall' in part && part.functionCall?.name) {
+              agentLogger.debug(
+                `[Runner] Tool call: ${part.functionCall.name}, args: ${JSON.stringify(part.functionCall.args)}`
+              );
+              yield {
+                type: 'tool_call',
+                toolCall: {
+                  function: {
+                    name: part.functionCall.name,
+                    arguments: part.functionCall.args as Record<string, unknown>,
+                  },
                 },
-              },
-            };
+              };
+            }
           }
+        }
+
+        // ADK may yield empty "auth" events that appear final but aren't meaningful.
+        // Skip these and retry.
+        if (isFinalResponse(event)) {
+          const hasContent =
+            (event.content?.parts?.length ?? 0) > 0 || event.actions?.transferToAgent;
+
+          if (hasContent) {
+            agentLogger.debug(`[Runner] Final response received from ${event.author}`);
+            gotFinalContent = true;
+            yield { type: 'done' };
+            return;
+          }
+
+          lastErrorCode = (event as any).errorCode?.toString();
+          lastErrorMessage = (event as any).errorMessage;
+          agentLogger.warn(
+            `[Runner] Empty final event from ${event.author} ` +
+              `(attempt ${attempt + 1}/${MAX_RETRIES + 1}). ` +
+              `errorCode: ${lastErrorCode ?? 'none'}, errorMessage: ${lastErrorMessage ?? 'none'}`
+          );
+          break;
         }
       }
 
-      // Check for final response
-      // Note: ADK may yield empty "auth" events that appear final but aren't meaningful
-      // Skip these and continue to the next event
-      if (isFinalResponse(event)) {
-        const hasContent =
-          (event.content?.parts?.length ?? 0) > 0 || event.actions?.transferToAgent;
-        if (hasContent) {
-          agentLogger.debug(`[Runner] Final response received from ${event.author}`);
-          yield { type: 'done' };
-          return;
-        }
-        agentLogger.warn(
-          `[Runner] Empty final event from ${event.author} — model may have failed silently (auth error? invalid model name?). Event: ${JSON.stringify({ id: event.id, role: event.content?.role, parts: event.content?.parts?.length ?? 0, actions: event.actions })}`
-        );
+      if (!gotFinalContent) {
+        attempt++;
       }
     }
 
-    agentLogger.debug('[Runner] Loop completed without final response');
-    yield { type: 'done' };
+    if (!gotFinalContent) {
+      const reason = retryReason();
+      agentLogger.error(`[Runner] All ${MAX_RETRIES + 1} attempts exhausted — ${reason}`);
+      yield {
+        type: 'text',
+        content: `The model failed after ${MAX_RETRIES + 1} attempts: ${reason}`,
+      };
+      yield { type: 'done' };
+    }
   } catch (error) {
     agentLogger.error({ error }, '[Runner] Error during agent execution');
     yield {

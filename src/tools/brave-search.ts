@@ -19,6 +19,7 @@ export async function braveSearch(query: string): Promise<string> {
   url.searchParams.set('count', '10');
 
   try {
+    // TODO(stability): fetch() has no timeout/AbortSignal — long requests will hang indefinitely
     const response = await fetch(url.toString(), {
       headers: {
         Accept: 'application/json',

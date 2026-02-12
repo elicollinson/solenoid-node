@@ -1,4 +1,3 @@
-import { Box, useApp, useInput } from 'ink';
 /**
  * Main App Component
  *
@@ -10,6 +9,7 @@ import { Box, useApp, useInput } from 'ink';
  * - ink: React-based terminal UI framework
  * - React Suspense: Handles loading state during agent initialization
  */
+import { Box, useApp, useInput } from 'ink';
 import { Suspense, useEffect, useState } from 'react';
 import { loadSettings } from '../config/index.js';
 import { uiLogger } from '../utils/logger.js';
@@ -234,6 +234,12 @@ function AppContent() {
                   msg.id === assistantMessageId ? { ...msg, agentName: event.transferTo } : msg
                 )
               );
+            }
+            break;
+
+          case 'status':
+            if (event.content) {
+              setStatus(event.content);
             }
             break;
 
