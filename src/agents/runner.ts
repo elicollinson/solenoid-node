@@ -48,15 +48,15 @@ function serializeError(error: unknown): string {
 }
 
 /**
- * Debug: Log the agent hierarchy
+ * Debug: Log the agent hierarchy with model and rootAgent info
  */
-export function logAgentHierarchy(agent: LlmAgent, indent = 0) {
+export function logAgentHierarchy(agent: LlmAgent, indent = 0): void {
   const prefix = '  '.repeat(indent);
-  agentLogger.debug(`${prefix}[Agent] ${agent.name} (model: ${agent.model})`);
-  if (agent.subAgents && agent.subAgents.length > 0) {
-    for (const subAgent of agent.subAgents) {
-      logAgentHierarchy(subAgent as LlmAgent, indent + 1);
-    }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rootAgent is not exposed in ADK's public types
+  const rootName = (agent as any).rootAgent?.name ?? 'unknown';
+  agentLogger.debug(`${prefix}[Agent] ${agent.name} (model: ${agent.model}, root: ${rootName})`);
+  for (const subAgent of agent.subAgents) {
+    logAgentHierarchy(subAgent as LlmAgent, indent + 1);
   }
 }
 
@@ -66,6 +66,7 @@ export function logAgentHierarchy(agent: LlmAgent, indent = 0) {
  */
 export async function createRunner(): Promise<InMemoryRunner> {
   const initializedRootAgent = await createPlanningAgent();
+  logAgentHierarchy(initializedRootAgent);
   return new InMemoryRunner({
     agent: initializedRootAgent,
     appName: APP_NAME,

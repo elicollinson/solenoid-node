@@ -132,6 +132,24 @@ function getDynamicInstruction(context: InstructionContext): string {
 }
 
 /**
+ * Fix stale rootAgent references in the agent tree.
+ *
+ * ADK's BaseAgent computes `rootAgent` once at construction time by traversing
+ * `parentAgent` upward. But when agents are created as module-level singletons
+ * (before any parent exists), their `rootAgent` points to themselves. When the
+ * parent later calls `setParentAgentForSubAgents()`, it sets `parentAgent` but
+ * never recomputes `rootAgent`. This causes `getAgentByName()` to fail when
+ * sub-agents attempt transfers — they only search their own empty subtree.
+ */
+function fixAgentTreeRoots(agent: LlmAgent, root: LlmAgent): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rootAgent is not exposed in ADK's public types
+  (agent as any).rootAgent = root;
+  for (const sub of agent.subAgents) {
+    fixAgentTreeRoots(sub as LlmAgent, root);
+  }
+}
+
+/**
  * Creates a planning agent with dynamic MCP tools
  * Use this when you need MCP tools to be fully initialized
  */
@@ -163,7 +181,7 @@ Transfer back to planning_agent immediately.`,
     ...additionalSubAgents,
   ];
 
-  return new LlmAgent({
+  const planningAgent = new LlmAgent({
     name: 'planning_agent',
     model: modelName,
     description: 'Orchestrates multi-step tasks across specialist agents.',
@@ -171,4 +189,13 @@ Transfer back to planning_agent immediately.`,
     afterModelCallback: saveMemoriesOnFinalResponse,
     subAgents,
   });
+
+  // Fix stale rootAgent references (ADK bug workaround)
+  fixAgentTreeRoots(planningAgent, planningAgent);
+
+  agentLogger.debug(
+    '[Planning] Agent tree rootAgent fix applied — all sub-agents now reference planning_agent as root'
+  );
+
+  return planningAgent;
 }

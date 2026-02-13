@@ -10,13 +10,8 @@ Before pushing any code changes, you **must** complete the following verificatio
 
 After making any code changes, always start by running the code simplifier plugin to ensure the code is clean and follows best practices.
 
-The code-simplifier is an Anthropic-published plugin for Claude Code. Run it via:
+The code-simplifier is an Anthropic-published agent plugin for Claude Code. Run it via: the code-simplifier:codesimplifier agent
 
-```bash
-/simplify
-```
-
-Or use the Claude Code CLI with the code-simplifier plugin enabled.
 
 ### 2. Run Unit Tests
 
