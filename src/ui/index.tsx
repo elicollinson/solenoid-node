@@ -1,4 +1,3 @@
-import { LogLevel, setLogLevel } from '@google/adk';
 /**
  * UI Entry Point
  *
@@ -8,28 +7,32 @@ import { LogLevel, setLogLevel } from '@google/adk';
  * Dependencies:
  * - ink: React for CLIs - builds terminal UIs with React components
  */
+import { LogLevel, setLogLevel } from '@google/adk';
 import { render } from 'ink';
+import { initTracing, shutdownTracing } from '../telemetry/index.js';
 import { setupErrorHandlers, uiLogger } from '../utils/logger.js';
 import { App } from './app.js';
 
-// Suppress ADK console logs - set to higher than ERROR (3) to suppress all
-// Must be called before any ADK code runs
+// Suppress ADK console logs — must be called before any ADK code runs
 setLogLevel((LogLevel.ERROR + 1) as unknown as LogLevel);
 
-// Set up error handlers to catch crashes
 setupErrorHandlers(uiLogger);
+initTracing();
 
 uiLogger.info('Starting Solenoid UI');
 
+let exitCode = 0;
 try {
   const instance = render(<App />);
   uiLogger.info('UI rendered successfully');
   await instance.waitUntilExit();
   uiLogger.info('UI exited normally');
-  // Force exit - MCP connections and other async operations may keep process alive
-  process.exit(0);
 } catch (error) {
   const err = error instanceof Error ? error : new Error(String(error));
   uiLogger.fatal({ error: err.message, stack: err.stack }, 'UI crashed');
-  process.exit(1);
+  exitCode = 1;
+} finally {
+  await shutdownTracing();
+  // Force exit — MCP connections and other async operations may keep process alive
+  process.exit(exitCode);
 }
