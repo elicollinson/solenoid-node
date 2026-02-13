@@ -12,11 +12,16 @@ import { render } from 'ink-testing-library';
 import React from 'react';
 import { ChatInput } from '../../../../src/ui/components/ChatInput.js';
 
+// Strip ANSI escape codes for text matching.
+// TextInput renders the first placeholder character with reverse-video codes,
+// which splits the string and breaks simple .toContain() checks.
+const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '');
+
 describe('ChatInput', () => {
   it('renders with default placeholder', () => {
     const { lastFrame } = render(<ChatInput onSubmit={() => {}} />);
 
-    expect(lastFrame()).toContain('Ask the agent...');
+    expect(stripAnsi(lastFrame()!)).toContain('Ask the agent...');
   });
 
   it('renders with custom placeholder', () => {
@@ -24,8 +29,8 @@ describe('ChatInput', () => {
       <ChatInput onSubmit={() => {}} placeholder="Type your message..." />
     );
 
-    expect(lastFrame()).toContain('Type your message...');
-    expect(lastFrame()).not.toContain('Ask the agent...');
+    expect(stripAnsi(lastFrame()!)).toContain('Type your message...');
+    expect(stripAnsi(lastFrame()!)).not.toContain('Ask the agent...');
   });
 
   it('renders prompt character', () => {
