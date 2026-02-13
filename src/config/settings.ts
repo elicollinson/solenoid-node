@@ -199,6 +199,19 @@ export function getAdkModelName(agentName: AgentName, settings?: AppSettings): s
 }
 
 /**
+ * Get the configured interrupt key.
+ * Returns 'escape' if settings are unavailable.
+ */
+export function getInterruptKey(): string {
+  try {
+    const config = loadSettings();
+    return config.keyboard.interrupt;
+  } catch {
+    return 'escape';
+  }
+}
+
+/**
  * Get the Ollama host URL from configuration or environment.
  * Priority: OLLAMA_HOST env var > ollama_host config > embeddings.host config > default
  *

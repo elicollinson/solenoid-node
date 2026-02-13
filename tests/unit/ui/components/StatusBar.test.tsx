@@ -58,4 +58,29 @@ describe('StatusBar', () => {
     // Should still render the exit hint
     expect(lastFrame()).toContain('Ctrl+C to quit');
   });
+
+  it('shows interrupt hint when loading and interruptHint provided', () => {
+    const { lastFrame } = render(
+      <StatusBar isLoading={true} status="Thinking..." interruptHint="Esc to interrupt" />
+    );
+
+    expect(lastFrame()).toContain('Esc to interrupt');
+    expect(lastFrame()).toContain('Ctrl+C to quit');
+  });
+
+  it('does not show interrupt hint when not loading', () => {
+    const { lastFrame } = render(
+      <StatusBar isLoading={false} status="Ready" interruptHint="Esc to interrupt" />
+    );
+
+    expect(lastFrame()).not.toContain('Esc to interrupt');
+  });
+
+  it('does not show interrupt hint when interruptHint is undefined', () => {
+    const { lastFrame } = render(
+      <StatusBar isLoading={true} status="Thinking..." />
+    );
+
+    expect(lastFrame()).not.toContain('to interrupt');
+  });
 });

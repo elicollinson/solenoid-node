@@ -335,4 +335,52 @@ describe('MessageList', () => {
     // Should still render the label
     expect(lastFrame()).toContain('Solenoid');
   });
+
+  it('shows interrupted indicator when wasInterrupted=true and not streaming', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'Partial response',
+        isStreaming: false,
+        wasInterrupted: true,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+
+    expect(lastFrame()).toContain('-- interrupted --');
+  });
+
+  it('does not show interrupted indicator when wasInterrupted=false', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'Complete response',
+        isStreaming: false,
+        wasInterrupted: false,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+
+    expect(lastFrame()).not.toContain('-- interrupted --');
+  });
+
+  it('does not show interrupted indicator while still streaming', () => {
+    const messages: Message[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'Still going',
+        isStreaming: true,
+        wasInterrupted: true,
+      },
+    ];
+
+    const { lastFrame } = render(<MessageList messages={messages} />);
+
+    expect(lastFrame()).not.toContain('-- interrupted --');
+  });
 });

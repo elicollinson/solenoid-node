@@ -1,5 +1,5 @@
 import { TextInput } from '@inkjs/ui';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 /**
  * Solenoid Test Harness
  *
@@ -14,7 +14,7 @@ import { Box, Text } from 'ink';
  */
 import { render } from 'ink-testing-library';
 import type React from 'react';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
 import { MockAgent } from './mock-agent.js';
@@ -353,6 +353,14 @@ export class SolenoidTestHarness {
   }
 
   /**
+   * Interrupt the currently processing agent response
+   */
+  async interruptAgent(): Promise<void> {
+    this.ensureStarted();
+    await this.pressKey('escape');
+  }
+
+  /**
    * Get the current UI state
    */
   getState(): UIState {
@@ -582,6 +590,17 @@ export class SolenoidTestHarness {
       const [isProcessing, setIsProcessing] = useState(false);
       const [status, setStatus] = useState('Ready');
       const [inputKey, setInputKey] = useState(0);
+      const interruptRef = useRef(false);
+
+      // Interrupt handler - active during processing
+      useInput(
+        (_input, key) => {
+          if (key.escape) {
+            interruptRef.current = true;
+          }
+        },
+        { isActive: isProcessing }
+      );
 
       const handleSubmit = useCallback(async (text: string) => {
         const trimmed = text.trim();
@@ -652,7 +671,10 @@ export class SolenoidTestHarness {
         ]);
 
         try {
+          interruptRef.current = false;
           for await (const event of activeAgent.run(trimmed)) {
+            if (interruptRef.current) break;
+
             // Track events for custom agents that don't have their own tracking
             if (!activeAgent.getEventHistory) {
               eventHistory.push(event);
@@ -697,8 +719,10 @@ export class SolenoidTestHarness {
           );
         }
 
+        const wasInterrupted = interruptRef.current;
+        interruptRef.current = false;
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
+          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false, wasInterrupted } : m))
         );
         setIsProcessing(false);
         setStatus('Ready');

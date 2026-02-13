@@ -10,8 +10,8 @@
  * - React Suspense: Handles loading state during agent initialization
  */
 import { Box, useApp, useInput } from 'ink';
-import { Suspense, useEffect, useState } from 'react';
-import { loadSettings } from '../config/index.js';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { getInterruptKey, loadSettings } from '../config/index.js';
 import { uiLogger } from '../utils/logger.js';
 import {
   ChatInput,
@@ -29,6 +29,21 @@ import {
 import { useAgent } from './hooks/index.js';
 
 type Screen = 'chat' | 'settings' | 'help';
+
+function formatInterruptHint(interruptKey: string): string {
+  const label = interruptKey === 'escape' ? 'Esc' : interruptKey;
+  return `${label} to interrupt`;
+}
+
+function matchesInterruptKey(
+  interruptKey: string,
+  input: string,
+  key: { escape?: boolean; tab?: boolean },
+): boolean {
+  if (interruptKey === 'escape') return !!key.escape;
+  if (interruptKey === 'tab') return !!key.tab;
+  return input === interruptKey;
+}
 
 export function App() {
   return (
@@ -48,6 +63,8 @@ function AppContent() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [screen, setScreen] = useState<Screen>('chat');
+  const interruptRef = useRef(false);
+  const interruptKey = useMemo(() => getInterruptKey(), []);
 
   useEffect(() => {
     uiLogger.debug('App useEffect: loading settings');
@@ -68,6 +85,16 @@ function AppContent() {
       }
     },
     { isActive: screen !== 'chat' }
+  );
+
+  // Interrupt handler - active during processing on chat screen
+  useInput(
+    (input, key) => {
+      if (matchesInterruptKey(interruptKey, input, key)) {
+        interruptRef.current = true;
+      }
+    },
+    { isActive: isProcessing && screen === 'chat' }
   );
 
   const handleSlashCommand = (command: string): boolean => {
@@ -150,8 +177,10 @@ function AppContent() {
     ]);
 
     try {
+      interruptRef.current = false;
       // Direct ADK invocation via hook
       for await (const event of agent.run(text)) {
+        if (interruptRef.current) break;
         switch (event.type) {
           case 'text':
             if (event.content) {
@@ -259,6 +288,8 @@ function AppContent() {
         }
       }
 
+      const wasInterrupted = interruptRef.current;
+
       // Mark any remaining running tool calls as completed
       for (const tc of toolCallMap.values()) {
         if (tc.status === 'running') {
@@ -268,7 +299,9 @@ function AppContent() {
 
       setMessages((prev) =>
         prev.map((msg) =>
-          msg.id === assistantMessageId ? { ...msg, isStreaming: false, parts: [...parts] } : msg
+          msg.id === assistantMessageId
+            ? { ...msg, isStreaming: false, parts: [...parts], wasInterrupted }
+            : msg
         )
       );
     } catch (error) {
@@ -281,6 +314,7 @@ function AppContent() {
         )
       );
     } finally {
+      interruptRef.current = false;
       setIsProcessing(false);
       setStatus('Ready');
     }
@@ -306,7 +340,11 @@ function AppContent() {
           isProcessing ? 'Waiting for response...' : 'Ask the agent... (type /help for commands)'
         }
       />
-      <StatusBar isLoading={isProcessing} status={status} />
+      <StatusBar
+        isLoading={isProcessing}
+        status={status}
+        interruptHint={formatInterruptHint(interruptKey)}
+      />
     </Box>
   );
 }

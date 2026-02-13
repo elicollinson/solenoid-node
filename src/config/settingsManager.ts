@@ -17,6 +17,7 @@ const KNOWN_SECTIONS: Record<string, { displayName: string; description: string 
   mcp_servers: { displayName: 'MCP Servers', description: 'MCP server connections' },
   agent_prompts: { displayName: 'Agent Prompts', description: 'System prompts for agents' },
   embeddings: { displayName: 'Embeddings', description: 'Embedding model config' },
+  keyboard: { displayName: 'Keyboard', description: 'Keyboard shortcut configuration' },
 };
 
 /**

@@ -74,6 +74,7 @@ export interface Message {
   isStreaming?: boolean;
   parts?: MessagePart[]; // Interleaved content
   agentName?: string;
+  wasInterrupted?: boolean;
 }
 
 interface MessageListProps {
@@ -191,6 +192,11 @@ function MessageBubble({ message }: { message: Message }) {
         {label}
       </Text>
       {renderParts()}
+      {!message.isStreaming && message.wasInterrupted && (
+        <Box paddingLeft={2}>
+          <Text dimColor italic>-- interrupted --</Text>
+        </Box>
+      )}
     </Box>
   );
 }

@@ -2,6 +2,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import {
   EmbeddingsConfigSchema,
+  KeyboardConfigSchema,
   McpServerSchema,
   ModelsConfigSchema,
   SearchConfigSchema,
@@ -75,6 +76,8 @@ sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), Mcp
 
 // Ollama host validator - URL string
 sectionValidators.set('ollama_host', createZodValidator(z.string().url()));
+
+sectionValidators.set('keyboard', createZodValidator(KeyboardConfigSchema));
 
 // Agent prompts validator - record of strings with min length
 sectionValidators.set(

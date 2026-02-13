@@ -44,6 +44,7 @@ export function HelpScreen({ onClose }: HelpScreenProps) {
           <Text>Ctrl+C - Quit application</Text>
           <Text>Ctrl+L - Clear message history</Text>
           <Text>Enter - Send message</Text>
+          <Text>Esc - Interrupt agent response</Text>
           <Text>Esc - Close overlay screens</Text>
         </Box>
       </Box>

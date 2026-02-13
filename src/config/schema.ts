@@ -53,6 +53,10 @@ export const McpServerSchema = z.union([McpStdioServerSchema, McpHttpServerSchem
 
 export const AgentPromptsSchema = z.record(z.string(), z.string());
 
+export const KeyboardConfigSchema = z.object({
+  interrupt: z.string().default('escape'),
+}).default({});
+
 export const AppSettingsSchema = z.object({
   ollama_host: z.string().url().optional(),
   embeddings: EmbeddingsConfigSchema.default({}),
@@ -60,6 +64,7 @@ export const AppSettingsSchema = z.object({
   search: SearchConfigSchema.default({}),
   mcp_servers: z.record(z.string(), McpServerSchema).default({}),
   agent_prompts: AgentPromptsSchema.default({}),
+  keyboard: KeyboardConfigSchema,
 });
 
 export type EmbeddingsConfig = z.infer<typeof EmbeddingsConfigSchema>;
@@ -70,6 +75,7 @@ export type McpStdioServer = z.infer<typeof McpStdioServerSchema>;
 export type McpHttpServer = z.infer<typeof McpHttpServerSchema>;
 export type McpServer = z.infer<typeof McpServerSchema>;
 export type AgentPrompts = z.infer<typeof AgentPromptsSchema>;
+export type KeyboardConfig = z.infer<typeof KeyboardConfigSchema>;
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 
 export const AGENT_NAMES = [
