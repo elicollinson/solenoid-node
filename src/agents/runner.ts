@@ -18,7 +18,7 @@
 import { InMemoryRunner, isFinalResponse } from '@google/adk';
 import type { LlmAgent } from '@google/adk';
 import type { Content } from '@google/genai';
-import type { Span as OtelSpan } from '@opentelemetry/api';
+import type { Context as OtelContext, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, context, trace } from '@opentelemetry/api';
 import { agentLogger } from '../utils/logger.js';
 import { createPlanningAgent } from './planning.js';
@@ -141,14 +141,11 @@ function buildRetryMessage(
 }
 
 /**
- * Record an OTel span for a tool call, nested under the current agent span.
+ * Start an OTel span for a tool call, nested under the current agent span.
+ * The caller is responsible for ending the span (after the tool response arrives).
  */
-function recordToolSpan(
-  name: string,
-  args: unknown,
-  parentCtx: ReturnType<typeof context.active>
-): void {
-  const span = tracer.startSpan(
+function startToolSpan(name: string, args: unknown, parentCtx: OtelContext): OtelSpan {
+  return tracer.startSpan(
     `tool: ${name}`,
     {
       attributes: {
@@ -159,7 +156,14 @@ function recordToolSpan(
     },
     parentCtx
   );
-  span.end();
+}
+
+/**
+ * Truncate a serialized result string to a maximum length for span attributes.
+ */
+function truncateForSpan(value: string, maxLength = 4096): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}...[truncated]`;
 }
 
 const MAX_RETRIES = 5;
@@ -188,6 +192,7 @@ export async function* runAgent(
 
   let currentAgentSpan: OtelSpan | null = null;
   let currentAgentCtx = rootCtx;
+  const openToolSpans = new Map<string, OtelSpan>();
 
   try {
     await getOrCreateSession(runner, sid);
@@ -268,7 +273,9 @@ export async function* runAgent(
                 yield { type: 'text', content: part.text };
               }
               if ('functionCall' in part && part.functionCall?.name) {
-                recordToolSpan(part.functionCall.name, part.functionCall.args, currentAgentCtx);
+                const callId = part.functionCall.id ?? part.functionCall.name;
+                const toolSpan = startToolSpan(part.functionCall.name, part.functionCall.args, currentAgentCtx);
+                openToolSpans.set(callId, toolSpan);
                 agentLogger.debug(
                   `[Runner] Tool call: ${part.functionCall.name}, args: ${JSON.stringify(part.functionCall.args)}`
                 );
@@ -281,6 +288,23 @@ export async function* runAgent(
                     },
                   },
                 };
+              }
+              if ('functionResponse' in part && part.functionResponse) {
+                const { id, name, response } = part.functionResponse as {
+                  id?: string;
+                  name?: string;
+                  response?: unknown;
+                };
+                const callId = id ?? name;
+                const toolSpan = callId ? openToolSpans.get(callId) : undefined;
+                if (toolSpan) {
+                  toolSpan.setAttribute(
+                    'gen_ai.tool.call.result',
+                    truncateForSpan(JSON.stringify(response))
+                  );
+                  toolSpan.end();
+                  openToolSpans.delete(callId);
+                }
               }
             }
           }
@@ -334,6 +358,10 @@ export async function* runAgent(
       yield { type: 'done' };
     }
   } finally {
+    for (const span of openToolSpans.values()) {
+      span.end();
+    }
+    openToolSpans.clear();
     if (currentAgentSpan) currentAgentSpan.end();
     rootSpan.end();
   }
