@@ -29,7 +29,7 @@ const ext = markedTerminal({
   width: process.stdout.columns || 80,
 });
 const origText = ext.renderer!.text!;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// biome-ignore lint/suspicious/noExplicitAny: marked-terminal v7 types don't expose renderer internals
 ext.renderer!.text = function (this: any, token: any) {
   if (token?.tokens) return this.parser.parseInline(token.tokens);
   return origText.call(this, token);
@@ -177,6 +177,7 @@ function MessageBubble({ message }: { message: Message }) {
         const isLast = index === message.parts!.length - 1;
         const showCursor = isLast && !!message.isStreaming;
         return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: text parts are append-only and never reorder
           <Box key={`text-${index}`} paddingLeft={2}>
             {renderTextContent(part.content, !!message.isStreaming, showCursor)}
           </Box>
@@ -194,7 +195,9 @@ function MessageBubble({ message }: { message: Message }) {
       {renderParts()}
       {!message.isStreaming && message.wasInterrupted && (
         <Box paddingLeft={2}>
-          <Text dimColor italic>-- interrupted --</Text>
+          <Text dimColor italic>
+            -- interrupted --
+          </Text>
         </Box>
       )}
     </Box>

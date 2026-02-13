@@ -38,7 +38,7 @@ function formatInterruptHint(interruptKey: string): string {
 function matchesInterruptKey(
   interruptKey: string,
   input: string,
-  key: { escape?: boolean; tab?: boolean },
+  key: { escape?: boolean; tab?: boolean }
 ): boolean {
   if (interruptKey === 'escape') return !!key.escape;
   if (interruptKey === 'tab') return !!key.tab;

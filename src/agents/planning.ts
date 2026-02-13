@@ -110,13 +110,17 @@ try {
 }
 
 const modelName = settings ? getAdkModelName('planning_agent', settings) : 'gemini-2.5-flash';
-agentLogger.info(`[Planning] Resolved model: ${modelName}, provider: ${settings?.models?.default?.provider ?? 'unknown'}`);
+agentLogger.info(
+  `[Planning] Resolved model: ${modelName}, provider: ${settings?.models?.default?.provider ?? 'unknown'}`
+);
 
 if (settings?.models?.default?.provider === 'gemini') {
   const hasKey = !!(process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY);
   agentLogger.info(`[Planning] Gemini API key present: ${hasKey}`);
   if (!hasKey) {
-    agentLogger.warn('[Planning] No Gemini API key found. Set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY');
+    agentLogger.warn(
+      '[Planning] No Gemini API key found. Set GOOGLE_GENAI_API_KEY or GEMINI_API_KEY'
+    );
   }
 }
 
@@ -142,7 +146,7 @@ function getDynamicInstruction(context: InstructionContext): string {
  * sub-agents attempt transfers — they only search their own empty subtree.
  */
 function fixAgentTreeRoots(agent: LlmAgent, root: LlmAgent): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rootAgent is not exposed in ADK's public types
+  // biome-ignore lint/suspicious/noExplicitAny: rootAgent is not exposed in ADK's public types
   (agent as any).rootAgent = root;
   for (const sub of agent.subAgents) {
     fixAgentTreeRoots(sub as LlmAgent, root);

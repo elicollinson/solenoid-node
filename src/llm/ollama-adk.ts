@@ -378,7 +378,9 @@ export class OllamaLlm extends BaseLlm {
       });
     }
 
-    agentLogger.debug(`[OllamaLlm] Converted ${tools.length} tools: ${tools.map((t) => t.function.name).join(', ')}`);
+    agentLogger.debug(
+      `[OllamaLlm] Converted ${tools.length} tools: ${tools.map((t) => t.function.name).join(', ')}`
+    );
     return tools;
   }
 

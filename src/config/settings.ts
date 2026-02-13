@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { writeSettingsFile } from './generator.js';
 import {
   AGENT_NAMES,
   type AgentName,
@@ -19,7 +20,6 @@ import {
   AppSettingsSchema,
   type ModelConfig,
 } from './schema.js';
-import { writeSettingsFile } from './generator.js';
 
 const DEFAULT_SETTINGS_FILENAME = 'app_settings.yaml';
 const SOLENOID_CONFIG_DIR = '.solenoid';

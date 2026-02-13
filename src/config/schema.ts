@@ -53,9 +53,11 @@ export const McpServerSchema = z.union([McpStdioServerSchema, McpHttpServerSchem
 
 export const AgentPromptsSchema = z.record(z.string(), z.string());
 
-export const KeyboardConfigSchema = z.object({
-  interrupt: z.string().default('escape'),
-}).default({});
+export const KeyboardConfigSchema = z
+  .object({
+    interrupt: z.string().default('escape'),
+  })
+  .default({});
 
 export const AppSettingsSchema = z.object({
   ollama_host: z.string().url().optional(),

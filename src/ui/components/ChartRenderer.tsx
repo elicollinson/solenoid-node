@@ -130,8 +130,8 @@ function RenderLineGraph({ config }: { config: LineGraphConfig }) {
       )}
       {legendItems.length > 0 && (
         <Box marginTop={config.title ? 1 : 0} gap={2}>
-          {legendItems.map((item, i) => (
-            <Text key={i} color={item.color}>
+          {legendItems.map((item) => (
+            <Text key={item.label} color={item.color}>
               ● {item.label}
             </Text>
           ))}

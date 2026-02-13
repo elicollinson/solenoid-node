@@ -410,8 +410,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
       {validationResult && !validationResult.isValid && (
         <Box marginTop={1}>
           <Text color="red">Errors:</Text>
-          {validationResult.errors.slice(0, 3).map((err, i) => (
-            <Text key={i} color="red">
+          {validationResult.errors.slice(0, 3).map((err) => (
+            <Text key={err.path + err.message} color="red">
               {' '}
               {err.path ? `${err.path}: ` : ''}
               {err.message}

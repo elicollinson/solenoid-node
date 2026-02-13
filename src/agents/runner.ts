@@ -52,7 +52,7 @@ function serializeError(error: unknown): string {
  */
 export function logAgentHierarchy(agent: LlmAgent, indent = 0): void {
   const prefix = '  '.repeat(indent);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- rootAgent is not exposed in ADK's public types
+  // biome-ignore lint/suspicious/noExplicitAny: rootAgent is not exposed in ADK's public types
   const rootName = (agent as any).rootAgent?.name ?? 'unknown';
   agentLogger.debug(`${prefix}[Agent] ${agent.name} (model: ${agent.model}, root: ${rootName})`);
   for (const subAgent of agent.subAgents) {
@@ -127,7 +127,7 @@ export async function* runAgent(
 
   while (attempt <= MAX_RETRIES && !gotFinalContent) {
     if (attempt > 0) {
-      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s, 16s
+      const delayMs = BASE_DELAY_MS * 2 ** (attempt - 1); // 1s, 2s, 4s, 8s, 16s
       const reason = retryReason();
       agentLogger.info(
         `[Runner] Retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${reason}`
@@ -161,8 +161,13 @@ export async function* runAgent(
       })) {
         eventIndex++;
         agentLogger.debug(`[Runner] ===== EVENT #${eventIndex} (attempt ${attempt + 1}) =====`);
+        // biome-ignore lint/suspicious/noExplicitAny: errorCode/errorMessage not in ADK's public Event types
+        const eventAny = event as any;
         agentLogger.debug(
-          `[Runner] Event ID: ${event.id}, from ${event.author}, parts: ${event.content?.parts?.length ?? 0}, role: ${event.content?.role}, isFinal: ${isFinalResponse(event)}, transferToAgent: ${event.actions?.transferToAgent ?? 'none'}, errorCode: ${(event as any).errorCode ?? 'none'}, errorMessage: ${(event as any).errorMessage ?? 'none'}`
+          `[Runner] Event ID: ${event.id}, from ${event.author}, ` +
+            `parts: ${event.content?.parts?.length ?? 0}, role: ${event.content?.role}, ` +
+            `isFinal: ${isFinalResponse(event)}, transferToAgent: ${event.actions?.transferToAgent ?? 'none'}, ` +
+            `errorCode: ${eventAny.errorCode ?? 'none'}, errorMessage: ${eventAny.errorMessage ?? 'none'}`
         );
 
         if (event.actions?.transferToAgent) {
@@ -224,8 +229,10 @@ export async function* runAgent(
             return;
           }
 
-          lastErrorCode = (event as any).errorCode?.toString();
-          lastErrorMessage = (event as any).errorMessage;
+          // biome-ignore lint/suspicious/noExplicitAny: errorCode/errorMessage not in ADK's public Event types
+          const errEvent = event as any;
+          lastErrorCode = errEvent.errorCode?.toString();
+          lastErrorMessage = errEvent.errorMessage;
           agentLogger.warn(
             `[Runner] Empty final event from ${event.author} ` +
               `(attempt ${attempt + 1}/${MAX_RETRIES + 1}). ` +

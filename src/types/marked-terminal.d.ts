@@ -13,6 +13,6 @@ declare module 'marked-terminal' {
 
   export function markedTerminal(
     options?: TerminalRendererOptions,
-    highlightOptions?: Record<string, unknown>,
+    highlightOptions?: Record<string, unknown>
   ): MarkedExtension;
 }
