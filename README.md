@@ -1,188 +1,50 @@
-<p align="center">
-  <img src="assets/solenoid_logo.svg" width="300" alt="Solenoid Logo">
-</p>
-
 # Solenoid
-A multi-agent system powered by Google ADK with an AG-UI compatible API server and Textual-based terminal client.
+
+A multi-agent AI system powered by Google ADK with a React-based terminal UI, built on Bun.
+
+## Features
+
+- **Multi-agent hierarchy** with planning-driven orchestration
+- **React/Ink terminal UI** with real-time streaming, markdown rendering, and inline charts
+- **Secure Python code execution** via Pyodide (WebAssembly)
+- **Web research** via Brave Search API
+- **MCP support** for extensible tool integration (stdio + HTTP servers)
+- **Local memory system** with hybrid search (SQLite + FTS5 + sqlite-vec, RRF fusion)
+- **Configurable LLM providers**: Gemini (default) and Ollama (local inference)
+- **Per-agent model overrides** and custom system prompts via YAML
+- **OpenTelemetry tracing** with optional W&B Weave integration
+- **Configurable agent interrupt** (Escape/Tab/custom key)
+- **In-app settings editor**, slash commands, structured JSON logging
 
 ## Installation
 
 ### Homebrew (Recommended)
 
 ```bash
-brew update
 brew tap elicollinson/solenoid
 brew install solenoid
 ```
 
 Then run:
+
 ```bash
 solenoid
 ```
 
 ### From Source
 
-See [Development](#development) section below for building from source with Poetry.
-
-## Features
-
-- **Multi-Agent Architecture**: Hierarchical agent system with specialized agents for different tasks
-- **AG-UI Protocol**: Standards-compliant streaming API with Server-Sent Events (SSE)
-- **Textual TUI Client**: Modern terminal-based chat interface with real-time streaming
-- **Local Code Execution**: Secure WASM sandbox for Python execution with Pygal charting
-- **Web Research**: Brave Search integration for real-time web queries
-- **MCP Support**: Model Context Protocol for extensible tool integration (stdio and HTTP servers)
-- **Local Memory System**: SQLite + FTS5 + sqlite-vec for hybrid semantic/keyword search with BGE reranking
-- **Configurable Models**: Support for Gemini (default) and Ollama models via Google ADK
-- **Customizable Prompts**: All agent prompts configurable via YAML
-- **In-App Settings Editor**: Edit configuration via `/settings` command with YAML validation
-- **Slash Commands**: Extensible command system for quick actions (`/settings`, `/help`, `/clear`)
-
-## Installation
-
-This project uses `poetry` for dependency management:
+Requires [Bun](https://bun.sh):
 
 ```bash
-# Install dependencies (creates the virtual environment)
-poetry install
+git clone https://github.com/elicollinson/solenoid.git
+cd solenoid
+bun install
+bun run start
 ```
 
 ## Quick Start
 
-### Bundled Mode (Recommended)
-
-Start both backend and frontend with a single command:
-
-```bash
-poetry run local-agent
-```
-
-This launches the FastAPI backend silently in the background and opens the Textual TUI in your terminal.
-
-### Separate Processes
-
-For development or debugging, run the server and client separately:
-
-```bash
-# Terminal 1: Start the AG-UI API server
-poetry run uvicorn app.server.main:app --port 8000
-
-# Terminal 2: Start the terminal client
-poetry run terminal-app
-```
-
-The client connects to `http://localhost:8000/api/agent` by default.
-
-## Architecture
-
-### System Overview
-
-```
-+------------------------------------------------------------------+
-|                         TUI Client                               |
-|                   (app/ui/agent_app.py)                          |
-|              Textual-based terminal interface                    |
-+-----------------------------+------------------------------------+
-                              | AG-UI SSE Stream
-                              v
-+------------------------------------------------------------------+
-|                       FastAPI Server                             |
-|                   (app/server/main.py)                           |
-|            AG-UI Protocol endpoint: /api/agent                   |
-+-----------------------------+------------------------------------+
-                              |
-                              v
-+------------------------------------------------------------------+
-|                      Agent Hierarchy                             |
-|                                                                  |
-|   user_proxy_agent (gateway)                                     |
-|   +-- prime_agent (router)                                       |
-|       +-- planning_agent (coordinator)                           |
-|           +-- code_executor_agent    (WASM Python sandbox)       |
-|           +-- chart_generator_agent  (Pygal visualizations)      |
-|           +-- research_agent         (Web search + retrieval)    |
-|           +-- mcp_agent              (MCP tools integration)     |
-|           +-- generic_executor_agent (General knowledge tasks)   |
-+------------------------------------------------------------------+
-```
-
-### Project Structure
-
-```
-main_bundled.py                   # Bundled entry point (backend + frontend)
-app/
-├── __init__.py
-├── main.py                       # TUI-only entry point
-├── server/
-│   ├── main.py                   # FastAPI AG-UI server
-│   └── manager.py                # Backend server lifecycle manager
-├── ui/
-│   ├── agent_app.py              # Textual TUI application
-│   ├── agui/                     # AG-UI protocol client
-│   │   ├── client.py             # SSE stream client
-│   │   └── types.py              # Event type definitions
-│   ├── chat_input/               # Input widget (with slash command support)
-│   ├── message_list/             # Message display widget
-│   └── settings/                 # Settings editor UI
-│       └── screen.py             # Modal settings screen
-├── settings/                     # Settings management module
-│   ├── validator.py              # Extensible YAML validation
-│   └── manager.py                # Settings load/save operations
-├── agent/
-│   ├── config.py                 # Settings loader
-│   ├── prime_agent/
-│   │   ├── agent.py              # Prime agent (router)
-│   │   └── user_proxy.py         # User proxy agent (gateway)
-│   ├── planning_agent/
-│   │   ├── agent.py              # Planning coordinator
-│   │   └── generic_executor.py
-│   ├── code_executor_agent/      # WASM Python executor
-│   ├── chart_generator_agent/    # Pygal chart generation
-│   ├── research_agent/           # Web search agent
-│   ├── mcp_agent/                # MCP tools agent
-│   ├── memory/
-│   │   ├── adk_sqlite_memory.py  # ADK memory service
-│   │   ├── embeddings.py         # Nomic embeddings
-│   │   ├── search.py             # Hybrid search
-│   │   └── rerank.py             # BGE reranking
-│   ├── search/
-│   │   ├── universal_search.py   # Brave Search
-│   │   └── web_retrieval.py      # Page content fetching
-│   ├── local_execution/
-│   │   ├── wasm_engine.py        # Wasmtime runtime
-│   │   └── adk_wrapper.py        # ADK code executor
-│   ├── models/
-│   │   └── factory.py            # LiteLLM model factory
-│   └── ollama/
-│       └── ollama_app.py         # Ollama server management
-└── resources/
-    └── python-wasi/              # Python WASM runtime
-```
-
-### Agent Roles
-
-| Agent | Role | Capabilities |
-|-------|------|--------------|
-| `user_proxy_agent` | Gateway | Receives user requests, delegates to prime_agent, validates responses |
-| `prime_agent` | Router | Decides whether to answer directly or delegate to planning_agent |
-| `planning_agent` | Coordinator | Creates execution plans, delegates to specialist agents |
-| `code_executor_agent` | Code execution | Runs Python in WASM sandbox, math calculations |
-| `chart_generator_agent` | Visualization | Creates Pygal charts (bar, line, pie, scatter, etc.) |
-| `research_agent` | Web research | Searches the web, retrieves page content |
-| `mcp_agent` | Tool integration | Uses MCP servers for documentation lookup, file operations |
-| `generic_executor_agent` | General tasks | Writing, summaries, explanations, general knowledge |
-
-## Configuration
-
-All configuration is managed through `app_settings.yaml` in the project root.
-
-### Model Configuration
-
-Solenoid supports multiple model providers. Gemini is the default and requires no local infrastructure.
-
-#### Gemini (Default)
-
-Set your API key as an environment variable:
+Set your Gemini API key:
 
 ```bash
 export GOOGLE_GENAI_API_KEY="your-api-key"
@@ -190,66 +52,192 @@ export GOOGLE_GENAI_API_KEY="your-api-key"
 export GEMINI_API_KEY="your-api-key"
 ```
 
+Then start the app:
+
+```bash
+bun run start
+
+# Or with watch mode for development
+bun run dev
+```
+
+## Architecture
+
+### System Overview
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                  Terminal UI (Ink/React)                  │
+│                    src/ui/app.tsx                         │
+│   React 18 + Ink 5 — Markdown, charts, tool status       │
+└──────────────────────────┬───────────────────────────────┘
+                           │  Direct function call (no HTTP)
+                           v
+┌──────────────────────────────────────────────────────────┐
+│              ADK InMemoryRunner (src/agents/runner.ts)    │
+│       Session management, retry logic, OTel tracing      │
+└──────────────────────────┬───────────────────────────────┘
+                           │
+                           v
+┌──────────────────────────────────────────────────────────┐
+│                    Agent Hierarchy                        │
+│                                                          │
+│   planning_agent (orchestrator, no tools, delegates only) │
+│   ├── research_agent         (Brave Search + web reader) │
+│   ├── code_executor_agent    (Pyodide Python sandbox)    │
+│   ├── chart_generator_agent  (inline terminal charts)    │
+│   ├── mcp_agent              (MCP server tools)          │
+│   └── generic_executor_agent (general text tasks)        │
+└──────────────────────────────────────────────────────────┘
+```
+
+This is a **single-process architecture** — the UI invokes ADK agents directly, with no HTTP server layer.
+
+### Agent Hierarchy
+
+The agent tree is constructed in `src/agents/planning.ts`.
+
+| Agent | Role | Tools |
+|-------|------|-------|
+| `planning_agent` | Creates plans, delegates to specialists, handles failures | None (delegates only) |
+| `research_agent` | Web search, page content retrieval | `universal_search`, `read_webpage` |
+| `code_executor_agent` | Python code execution in sandboxed WASM | `execute_code` |
+| `chart_generator_agent` | Data visualization in the terminal | `render_chart` |
+| `mcp_agent` | External tools via MCP servers | Dynamically discovered from MCP config |
+| `generic_executor_agent` | Writing, summaries, general knowledge tasks | None |
+
+**Transfer protocol:** Specialist agents transfer results back to `planning_agent` when done. The planner can chain agents by instructing a specialist to transfer directly to another.
+
+### Design Assumptions
+
+- **Planning-first**: `planning_agent` must create an explicit plan before delegating
+- **No clarification requests**: Agents make reasonable assumptions rather than asking the user
+- **Failure-forward**: On agent failure, `planning_agent` tries an alternative agent (never retries the same one)
+- **Single-process**: No HTTP server — UI invokes ADK agents directly via `InMemoryRunner`
+- **Session-based**: `InMemoryRunner` maintains per-session conversation history
+- **Streaming-first**: All responses stream via `AsyncGenerator<AgentStreamChunk>` for real-time UI updates
+- **ADK rootAgent patch**: Module-level singleton agents require post-construction `rootAgent` fix (`fixAgentTreeRoots()` in `src/agents/planning.ts`) due to an [ADK bug](https://github.com/google/adk-python/issues/2164)
+
+### Tool System
+
+| Tool | Agent | Source | Purpose |
+|------|-------|--------|---------|
+| `universal_search` | research_agent | `src/tools/brave-search.ts` | Brave Search API (10 results) |
+| `read_webpage` | research_agent | `src/tools/web-reader.ts` | Fetch + extract text (max 10K chars, 15s timeout) |
+| `execute_code` | code_executor_agent | `src/tools/code-execution.ts` | Python execution in Pyodide sandbox |
+| `render_chart` | chart_generator_agent | `src/agents/chart-generator.ts` | Inline terminal chart rendering |
+| MCP tools | mcp_agent | `src/tools/mcp-adk-adapter.ts` | Dynamically loaded from configured MCP servers |
+
+All tools use ADK `FunctionTool` wrappers with Zod schema validation (`src/tools/adk-tools.ts`). MCP tools are converted from JSON Schema to Zod via the MCP-to-ADK adapter (`src/tools/mcp-adk-adapter.ts`).
+
+### Terminal UI
+
+Built with [Ink 5](https://github.com/vadimdemedes/ink) (React for terminals) and React 18.
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `App` | `src/ui/app.tsx` | Root component with ErrorBoundary + Suspense |
+| `Header` | `src/ui/components/Header.tsx` | App branding |
+| `MessageList` | `src/ui/components/MessageList.tsx` | Chat history with markdown rendering |
+| `ChatInput` | `src/ui/components/ChatInput.tsx` | Text input with slash command support |
+| `StatusBar` | `src/ui/components/StatusBar.tsx` | Agent status and loading indicator |
+| `ChartRenderer` | `src/ui/components/ChartRenderer.tsx` | Inline chart display via `ink-chart` |
+| `SettingsScreen` | `src/ui/components/SettingsScreen.tsx` | In-app YAML settings editor |
+| `HelpScreen` | `src/ui/components/HelpScreen.tsx` | Command reference |
+
+Markdown is rendered with `marked` + `marked-terminal`. The `useAgent()` hook uses React Suspense for async agent initialization.
+
+### Memory System
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Database | `src/memory/database.ts` | SQLite via `bun:sqlite`, WAL mode |
+| Schema | `src/memory/schema.ts` | `memories` table, `memories_vec` (sqlite-vec), `memories_fts` (FTS5) |
+| Embeddings | `src/memory/embeddings.ts` | Ollama embeddings (`nomic-embed-text` default), 256-dim |
+| Search | `src/memory/search.ts` | Hybrid retrieval: dense (vector) + sparse (FTS5 BM25) |
+| Service | `src/memory/service.ts` | CRUD operations with automatic embedding |
+| Callbacks | `src/memory/callbacks.ts` | ADK integration: `saveMemoriesOnFinalResponse` |
+
+Search uses **Reciprocal Rank Fusion (RRF)** to merge dense and sparse results. Memory types: profile, episodic, semantic.
+
+### LLM Providers
+
+| Provider | Config Value | Model Naming | Notes |
+|----------|-------------|--------------|-------|
+| Gemini | `gemini` | Direct (e.g., `gemini-2.5-flash`) | Default. Requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY` |
+| Ollama | `ollama_chat` | Prefixed (e.g., `ollama/llama3.2`) | Local inference. 2-min timeout. Auto-registered with ADK `LLMRegistry` |
+
+Ollama integration is implemented via `OllamaLlm` extending ADK's `BaseLlm` (`src/llm/ollama-adk.ts`). Per-agent model overrides are configured via `models.agents` in the settings file.
+
+### Code Execution Sandbox
+
+Python code runs in a [Pyodide](https://pyodide.org/) sandbox (CPython compiled to WebAssembly):
+
+- **Pre-installed**: micropip, pygal
+- **Available**: Full Python standard library (math, json, datetime, collections, itertools, re, etc.)
+- **Not available**: numpy, pandas, requests (no network access, no binary packages)
+- **Features**: Virtual filesystem for file I/O, separate stdout/stderr capture, output file extraction
+
+Implementation: `src/sandbox/pyodide-engine.ts`
+
+### Telemetry
+
+OpenTelemetry spans capture the full request lifecycle:
+
+```
+solenoid.agent_run (root span)
+├── agent: <name>          (per-agent invocation)
+│   ├── tool: <name>       (tool execution)
+│   └── llm_call           (LLM request/response)
+└── agent: <name>
+    └── ...
+```
+
+LLM tracing callbacks (`src/telemetry/llm-tracing.ts`) capture: model name, conversation history, token usage, finish reason, system instructions, and thinking/chain-of-thought.
+
+Optional **W&B Weave** integration requires `WANDB_API_KEY` and `WANDB_PROJECT_ID` environment variables. Content is truncated to 32KB for OTel attributes.
+
+Structured JSON logging writes to `logs/` (agent.log, ui.log, server.log).
+
+## Configuration
+
+Config file location: `~/.solenoid/app_settings.yaml` (created on first run).
+
+### Sections
+
+| Section | Purpose |
+|---------|---------|
+| `models` | Default model, agent model, extractor model, per-agent overrides (`models.agents`) |
+| `embeddings` | Embedding provider, host, model for memory system |
+| `search` | Search provider and API keys (Brave, Google) |
+| `mcp_servers` | MCP server connections (stdio and HTTP) |
+| `agent_prompts` | Custom system prompts for each agent |
+| `keyboard` | Interrupt key configuration (default: `escape`) |
+
+All config is validated with Zod schemas (`src/config/schema.ts`).
+
+### Model Configuration
+
 ```yaml
 models:
   default:
-    name: "gemini-3-flash-preview"
+    name: "gemini-2.5-flash"
     provider: "gemini"
     context_length: 128000
+  # Per-agent overrides
+  agents:
+    research_agent:
+      name: "gemini-2.5-flash"
 ```
-
-#### Ollama (Local Inference)
-
-For fully local inference using [Ollama](https://ollama.com/):
-
-```yaml
-models:
-  default:
-    name: "ministral-3:8b"
-    provider: "ollama_chat"
-    context_length: 128000
-```
-
-If a configured Ollama model is not found locally, the application automatically attempts to pull it. Uses model names from the [Ollama library](https://ollama.com/library).
-
-#### Model Roles
-
-- `default`: Fallback model for unspecified roles
-- `agent`: Used by all agent roles (requires function calling support)
-- `extractor`: Used for memory extraction
-
-#### Supported Providers
-
-| Provider | Config Value | Notes |
-|----------|-------------|-------|
-| Gemini | `gemini` | Default. Requires `GOOGLE_GENAI_API_KEY` or `GEMINI_API_KEY` env var |
-| Ollama | `ollama_chat` | Local inference. Requires running Ollama server |
-
-Models used for the `agent` role must support **function calling** (tool use).
-
-### Search Configuration
-
-```yaml
-search:
-  provider: "brave"
-  brave_search_api_key: "YOUR_BRAVE_API_KEY"
-```
-
-The `research_agent` uses Brave Search for web queries. Get an API key from [Brave Search API](https://brave.com/search/api/).
 
 ### MCP Server Configuration
-
-MCP servers are configured in `app_settings.yaml`:
 
 ```yaml
 mcp_servers:
   # stdio-based server (local process)
   filesystem:
     command: "npx"
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-filesystem"
-      - "./"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "./"]
 
   # HTTP-based server (remote)
   context7:
@@ -259,353 +247,156 @@ mcp_servers:
       CONTEXT7_API_KEY: "your-api-key"
 ```
 
-**Supported Server Types:**
-- `stdio`: Launches a local process (default, requires `command` and `args`)
-- `http`: Connects to a remote HTTP server (requires `url`, optional `headers`)
-
-When the agent starts, it initializes the configured MCP servers and adds their tools to the `mcp_agent`'s toolset. This allows the agent to use these tools seamlessly during conversations.
-
-For example, with the filesystem server configured above, the agent can use tools like `list_directory` and `read_file` to interact with your local files.
-
 ### Agent Prompts
-
-All agent instructions are configurable in `app_settings.yaml`:
 
 ```yaml
 agent_prompts:
-  user_proxy_agent: |
-    You are the User Proxy, the gateway between the user and the agent system...
-
-  prime_agent: |
-    You are the Prime Agent, the intelligent router...
-
   planning_agent: |
     You are the Chief Planner...
-
-  code_executor_agent: |
-    You are a Python Code Executor Agent operating in a secure WASM sandbox...
-
-  chart_generator_agent: |
-    You are a Python Chart Generator Agent specializing in Pygal visualizations...
-
   research_agent: |
     You are the Research Specialist...
-
-  mcp_agent: |
-    You are an MCP tools specialist...
-
-  generic_executor_agent: |
-    You are the Generic Executor Agent...
 ```
 
-This allows you to customize agent behavior without modifying code.
+## Slash Commands
 
-## Settings Management
-
-The application includes an in-app settings editor accessible via the `/settings` command. This provides a safe way to modify configuration without directly editing YAML files.
-
-### Using the Settings Editor
-
-1. Type `/settings` in the chat input
-2. A modal screen appears with available configuration sections
-3. Use arrow keys to navigate between sections
-4. Press `Enter` to edit a section
-5. Modify the YAML in the text editor
-6. Press `Ctrl+S` or click `Save` to validate and save changes
-7. Press `Escape` or click `Back` to return to section list
-8. Press `Escape` again or click `Close` to exit settings
-
-**Editor Keyboard Shortcuts:**
-| Key | Action |
-|-----|--------|
-| `Ctrl+S` | Save current section |
-| `Escape` | Go back / Close |
-| `Enter` | Select section to edit |
-
-### Available Sections
-
-| Section | Description |
+| Command | Description |
 |---------|-------------|
-| `models` | Model configuration (defaults and per-agent overrides in `models.agents`) |
-| `search` | Web search provider and API keys |
-| `mcp_servers` | MCP server connections (stdio and HTTP) |
-| `agent_prompts` | System prompts for each agent |
+| `/help` | Show help screen |
+| `/settings` | Open settings editor |
+| `/clear` | Clear message history |
+| `/agents` | List available agents |
+| `/quit`, `/exit` | Exit application |
 
-### Validation
-
-Changes are validated before saving. The validator checks:
-
-- **YAML Syntax**: Ensures valid YAML formatting
-- **Structure**: Validates types match expected schema
-- **Section-specific rules**: Custom validation per section type
-
-If validation fails, an error message is displayed and the editor remains open for corrections.
-
-### Backend Restart
-
-After successfully saving settings, the application prompts you to restart the backend server. This ensures your changes take effect immediately.
-
-**Restart Dialog Options:**
-- **Restart Now**: Stops the backend, clears caches, and starts a fresh server instance
-- **Later**: Saves settings but leaves the current backend running (manual restart required)
-
-**What happens during restart:**
-1. The current uvicorn server is gracefully stopped
-2. Settings caches are cleared
-3. A new server instance starts with updated configuration
-4. The application waits for the health check to pass
-5. Status updates are shown throughout the process
-
-**Note:** If running the frontend and backend separately (not in bundled mode), the restart prompt will indicate that manual restart is required.
-
-### Adding Custom Validators
-
-The settings system is extensible. To add validation for a new section or customize existing validation:
-
-```python
-from app.settings.validator import SettingsValidator, ValidationResult, ValidationError
-
-def validate_my_section(value: any, reference: any) -> ValidationResult:
-    """Custom validator for 'my_section' settings."""
-    errors = []
-
-    if not isinstance(value, dict):
-        errors.append(ValidationError("", "Must be a mapping"))
-        return ValidationResult(is_valid=False, errors=errors)
-
-    # Add your validation logic
-    if 'required_field' not in value:
-        errors.append(ValidationError("required_field", "This field is required"))
-
-    return ValidationResult(
-        is_valid=len(errors) == 0,
-        errors=errors,
-        parsed_value=value
-    )
-
-# Register the validator
-SettingsValidator.register_validator('my_section', validate_my_section)
-```
-
-### Adding New Slash Commands
-
-To add a new slash command to the TUI:
-
-1. Edit `app/ui/agent_app.py`
-2. Add a case to the `_handle_command` method:
-
-```python
-def _handle_command(self, command: str, args: str) -> None:
-    feed = self.query_one(MessageList)
-
-    if command == "settings":
-        self._open_settings()
-    elif command == "mycommand":
-        self._handle_my_command(args)
-    # ... other commands
-    else:
-        feed.add_system_message(f"Unknown command: /{command}")
-
-def _handle_my_command(self, args: str) -> None:
-    """Handle the /mycommand slash command."""
-    # Your command logic here
-    pass
-```
-
-3. Update the help text in `_show_help()` to document your command
-
-## Usage
-
-### TUI Keyboard Shortcuts
+## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Ctrl+J` / `Shift+Enter` | Insert newline |
+| `Escape` | Interrupt agent (configurable) / return from settings/help |
 | `Ctrl+C` | Quit application |
-| `Ctrl+L` | Clear message feed |
-| `Escape` | Close settings / Go back |
 
-### Slash Commands
+## Project Structure
 
-The TUI supports slash commands for quick actions:
-
-| Command | Description |
-|---------|-------------|
-| `/settings` | Open the settings editor |
-| `/clear` | Clear the chat history |
-| `/help` | Show available commands |
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/agent` | POST | AG-UI agent run endpoint (SSE stream) |
-| `/` | GET | API information and agent hierarchy |
-| `/health` | GET | Health check |
-| `/docs` | GET | OpenAPI documentation |
-
-### Example API Request
-
-```bash
-curl -X POST http://localhost:8000/api/agent \
-  -H "Content-Type: application/json" \
-  -d '{"messages": [{"role": "user", "content": "What is 15 factorial?"}]}'
 ```
-
-### Configuring a Custom TUI Endpoint
-
-```python
-from app.ui.agent_app import AgentApp
-
-# Connect to a different backend
-app = AgentApp(
-    base_url="http://other-host:3000",
-    endpoint="/api/agent"
-)
-app.run()
+src/
+├── cli.ts                    # CLI entry point (Commander.js)
+├── index.ts                  # Package entry
+├── agents/
+│   ├── factory.ts            # Agent hierarchy factory
+│   ├── planning.ts           # Root orchestrator agent
+│   ├── research.ts           # Web research agent
+│   ├── code-executor.ts      # Python execution agent
+│   ├── chart-generator.ts    # Chart visualization agent
+│   ├── mcp.ts                # MCP tools agent
+│   ├── generic.ts            # General knowledge agent
+│   ├── runner.ts             # Agent execution runner (InMemoryRunner)
+│   └── types.ts              # Shared agent types
+├── config/
+│   ├── schema.ts             # Zod validation schemas
+│   ├── settings.ts           # Settings loader
+│   ├── settingsManager.ts    # Settings CRUD
+│   ├── generator.ts          # Default config generation
+│   └── validator.ts          # Config validation
+├── llm/
+│   ├── ollama-adk.ts         # Ollama ADK integration (BaseLlm)
+│   └── ollama.ts             # Ollama client wrapper
+├── mcp/
+│   └── manager.ts            # MCP server lifecycle manager
+├── memory/
+│   ├── database.ts           # SQLite database (bun:sqlite)
+│   ├── schema.ts             # Database schema (memories, FTS5, vec)
+│   ├── embeddings.ts         # Ollama embedding service
+│   ├── search.ts             # Hybrid search (dense + sparse + RRF)
+│   ├── service.ts            # Memory CRUD service
+│   └── callbacks.ts          # ADK memory callbacks
+├── sandbox/
+│   └── pyodide-engine.ts     # Python WASM sandbox
+├── telemetry/
+│   ├── index.ts              # Telemetry setup
+│   ├── llm-tracing.ts        # OTel LLM tracing callbacks
+│   └── weave.ts              # W&B Weave exporter
+├── tools/
+│   ├── adk-tools.ts          # ADK FunctionTool wrappers
+│   ├── brave-search.ts       # Brave Search API
+│   ├── web-reader.ts         # Web page fetcher
+│   ├── code-execution.ts     # Code execution wrapper
+│   └── mcp-adk-adapter.ts    # MCP-to-ADK tool converter
+├── ui/
+│   ├── app.tsx               # Root React component
+│   ├── index.tsx             # UI entry point (Ink render)
+│   ├── components/
+│   │   ├── Header.tsx
+│   │   ├── MessageList.tsx
+│   │   ├── ChatInput.tsx
+│   │   ├── StatusBar.tsx
+│   │   ├── ChartRenderer.tsx
+│   │   ├── ChartModal.tsx
+│   │   ├── SettingsScreen.tsx
+│   │   ├── HelpScreen.tsx
+│   │   ├── LoadingScreen.tsx
+│   │   └── ErrorBoundary.tsx
+│   └── hooks/
+│       └── useAgent.ts       # Agent initialization (Suspense)
+└── utils/
+    ├── logger.ts             # Structured JSON logging
+    └── fetch.ts              # Fetch with timeout
 ```
-
-## Local Memory System
-
-The agent automatically remembers context across conversations using a local memory system.
-
-### How It Works
-
-1. **Injection**: When a user sends a message, relevant memories are retrieved and injected into the prompt
-2. **Extraction**: When a final response is generated, an LLM extracts key facts, preferences, and events
-3. **Storage**: Memories are embedded via Ollama (`nomic-embed-text`) and stored in SQLite with vector search
-
-### Storage Stack
-
-| Component | Purpose |
-|-----------|---------|
-| SQLite + FTS5 | Keyword search |
-| sqlite-vec | Vector similarity search (256-dim embeddings) |
-| BGE Reranker | Cross-encoder reranking for relevance |
-
-### Configuration
-
-```yaml
-embeddings:
-  provider: ollama
-  host: http://localhost:11434
-  model: nomic-embed-text
-```
-
-The embedding model is pulled automatically on first run. Memories persist in `memories.db` across restarts.
-
-## Code Execution Environment
-
-Python code runs in a secure WASM sandbox:
-
-- **Runtime**: Wasmtime with Python 3.13 WASI
-- **Available Libraries**: Python standard library + Pygal
-- **Output**: Captured via stdout (print statements)
-- **Charts**: Rendered to SVG files
-
-**Example capabilities:**
-- Mathematical calculations
-- Data processing with standard library
-- Chart generation (bar, line, pie, scatter, histogram, radar)
-
-## Evaluation
-
-Run agent evaluation tests:
-
-```bash
-poetry run python tests/eval/run_eval.py --runs 5
-```
-
-This executes test cases from `tests/eval/agent_test_cases.csv` and generates reports in `tests/eval/eval_results/`.
-
-## Building a Standalone Binary
-
-You can package Solenoid as a standalone executable using PyInstaller:
-
-```bash
-# Install PyInstaller in your poetry environment
-poetry add --group dev pyinstaller
-
-# Build the binary using the spec file
-poetry run pyinstaller solenoid.spec
-```
-
-The executable will be created at `dist/solenoid`. This binary replicates the behavior of `poetry run local-agent` and can be distributed without requiring Python or Poetry to be installed.
-
-**Note:** The binary will be large (~500MB+) due to bundled ML dependencies (transformers, torch, sentence-transformers). Build time is also significant due to dependency collection.
 
 ## Development
 
 ### Requirements
 
-- Python 3.11+
-- Poetry (for dependency management)
-- Ollama (only required for `ollama_chat` provider)
+- [Bun](https://bun.sh) (runtime and package manager)
+- [Ollama](https://ollama.com/) (optional, for local inference and memory embeddings)
 
-### Key Dependencies
+### Scripts
 
-- `google-adk` - Google Agent Development Kit
-- `ag-ui-adk` - AG-UI protocol adapter for ADK
-- `textual` - Terminal UI framework
-- `fastapi` + `uvicorn` - API server
-- `litellm` - LLM provider abstraction
-- `sqlite-vec` - Vector search extension
-- `sentence-transformers` - BGE reranker
-- `wasmtime` - WASM runtime
+| Command | Purpose |
+|---------|---------|
+| `bun run dev` | Start with watch mode |
+| `bun run start` | Start the app |
+| `bun run build` | Build to `dist/` |
+| `bun test` | Run tests (Bun's native test runner) |
+| `bun run lint` | Lint with Biome |
+| `bun run typecheck` | TypeScript type checking |
 
-### Running Tests
+### Linting
 
-```bash
-poetry run pytest
-```
+Uses [Biome](https://biomejs.dev/) — single quotes, trailing commas (ES5), semicolons.
 
-## Extending the Application
+## Technology Stack
 
-### Adding Custom Tools
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| `@google/adk` | ^0.2.4 | Google Agent Development Kit |
+| `@google/genai` | ^0.14.0 | Gemini API client |
+| `ink` | ^5.2.0 | React for terminal UIs |
+| `react` | ^18.3.1 | UI framework |
+| `@modelcontextprotocol/sdk` | ^1.12.1 | MCP client |
+| `ollama` | ^0.5.14 | Ollama API client |
+| `@opentelemetry/api` | ^1.9.0 | Distributed tracing |
+| `marked` | ^15.0.12 | Markdown parsing |
+| `marked-terminal` | ^7.3.0 | Markdown terminal rendering |
+| `@pppp606/ink-chart` | ^0.2.4 | Terminal charts |
+| `zod` | ^3.24.2 | Schema validation |
+| `commander` | ^13.1.0 | CLI framework |
+| `yaml` | ^2.7.1 | YAML parsing |
+| `chalk` | ^5.4.1 | Terminal colors |
+| `@biomejs/biome` | ^1.9.0 | Linter and formatter |
 
-Create a new tool using ADK's FunctionTool:
-
-```python
-from google.adk.tools.function_tool import FunctionTool
-
-def my_custom_tool(param: str) -> str:
-    """Tool description for the agent."""
-    return f"Result: {param}"
-
-custom_tool = FunctionTool(func=my_custom_tool)
-```
-
-### Adding a New Agent
-
-1. Create a new directory under `app/agent/`
-2. Define the agent in `agent.py`:
-
-```python
-from google.adk.agents import Agent
-from app.agent.models.factory import get_model
-from app.agent.config import get_agent_prompt
-
-agent = Agent(
-    name="my_agent",
-    model=get_model("agent"),
-    instruction=get_agent_prompt("my_agent"),
-    tools=[...],
-)
-```
-
-3. Add the prompt to `app_settings.yaml` under `agent_prompts`
-4. Register with the planning_agent's sub_agents list in `app/agent/planning_agent/agent.py`
+Runtime: [Bun](https://bun.sh) (includes native SQLite via `bun:sqlite`)
 
 ## Credits
 
-- Built with [Google ADK](https://github.com/google/adk-python)
-- AG-UI Protocol from [AG-UI](https://docs.ag-ui.com)
-- Terminal UI with [Textual](https://github.com/textualize/textual)
-- Local inference with [Ollama](https://ollama.com/)
-- Vector search with [sqlite-vec](https://github.com/asg017/sqlite-vec)
-- Embeddings from [Nomic AI](https://www.nomic.ai/)
+- [Google ADK](https://github.com/google/adk-node) — Agent Development Kit
+- [Ink](https://github.com/vadimdemedes/ink) — React for terminals
+- [Ollama](https://ollama.com/) — Local LLM inference
+- [sqlite-vec](https://github.com/asg017/sqlite-vec) — Vector search for SQLite
+- [Pyodide](https://pyodide.org/) — CPython in WebAssembly
+- [OpenTelemetry](https://opentelemetry.io/) — Distributed tracing
+- [Biome](https://biomejs.dev/) — Linter and formatter
+- [marked](https://marked.js.org/) — Markdown parser
 
 ## License
 
-This is a demonstration project for building multi-agent systems with local LLM inference.
+MIT
