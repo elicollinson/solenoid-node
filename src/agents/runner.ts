@@ -18,7 +18,7 @@
 import { InMemoryRunner, isFinalResponse } from '@google/adk';
 import type { LlmAgent } from '@google/adk';
 import type { Content } from '@google/genai';
-import type { Context as OtelContext, Span as OtelSpan } from '@opentelemetry/api';
+import type { Context as OtelContext } from '@opentelemetry/api';
 import { SpanStatusCode, context, trace } from '@opentelemetry/api';
 import { agentLogger } from '../utils/logger.js';
 import { createPlanningAgent } from './planning.js';
@@ -64,8 +64,7 @@ export function logAgentHierarchy(agent: LlmAgent, indent = 0): void {
 }
 
 /**
- * Creates a runner with fully initialized MCP tools
- * Use this when you need MCP tools to be fully initialized
+ * Creates a runner with fully initialized MCP tools.
  */
 export async function createRunner(): Promise<InMemoryRunner> {
   const initializedRootAgent = await createPlanningAgent();
@@ -141,29 +140,25 @@ function buildRetryMessage(
 }
 
 /**
- * Start an OTel span for a tool call, nested under the current agent span.
- * The caller is responsible for ending the span (after the tool response arrives).
+ * Bind an OTel context to an async generator so each iteration runs within that context.
+ * Without this, async generator bodies execute with the default context — not the
+ * context active when the generator was created. This ensures ADK's internal spans
+ * (invocation, invoke_agent, execute_tool) are properly parented under our root span.
  */
-function startToolSpan(name: string, args: unknown, parentCtx: OtelContext): OtelSpan {
-  return tracer.startSpan(
-    `tool: ${name}`,
-    {
-      attributes: {
-        'gen_ai.tool.name': name,
-        'gen_ai.operation.name': 'execute_tool',
-        'gen_ai.tool.call.args': JSON.stringify(args),
-      },
+function bindContextToAsyncGenerator<T>(
+  ctx: OtelContext,
+  gen: AsyncIterable<T>
+): AsyncIterable<T> {
+  const iter = gen[Symbol.asyncIterator]();
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: context.bind(ctx, iter.next.bind(iter)),
+        return: iter.return ? context.bind(ctx, iter.return.bind(iter)) : undefined,
+        throw: iter.throw ? context.bind(ctx, iter.throw.bind(iter)) : undefined,
+      } as AsyncIterator<T>;
     },
-    parentCtx
-  );
-}
-
-/**
- * Truncate a serialized result string to a maximum length for span attributes.
- */
-function truncateForSpan(value: string, maxLength = 4096): string {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength)}...[truncated]`;
+  };
 }
 
 const MAX_RETRIES = 5;
@@ -189,10 +184,6 @@ export async function* runAgent(
   rootSpan.setAttribute('wandb.thread_id', sid);
   rootSpan.setAttribute('wandb.is_turn', true);
   const rootCtx = trace.setSpan(context.active(), rootSpan);
-
-  let currentAgentSpan: OtelSpan | null = null;
-  let currentAgentCtx = rootCtx;
-  const openToolSpans = new Map<string, OtelSpan>();
 
   try {
     await getOrCreateSession(runner, sid);
@@ -225,7 +216,8 @@ export async function* runAgent(
 
       try {
         let eventIndex = 0;
-        for await (const event of context.with(rootCtx, () =>
+        for await (const event of bindContextToAsyncGenerator(
+          rootCtx,
           runner.runAsync({
             userId: 'default_user',
             sessionId: sid,
@@ -244,19 +236,6 @@ export async function* runAgent(
           );
 
           if (event.actions?.transferToAgent) {
-            if (currentAgentSpan) currentAgentSpan.end();
-            currentAgentSpan = tracer.startSpan(
-              `agent: ${event.actions.transferToAgent}`,
-              {
-                attributes: {
-                  'gen_ai.agent.name': event.actions.transferToAgent,
-                  'gen_ai.operation.name': 'invoke_agent',
-                },
-              },
-              rootCtx
-            );
-            currentAgentCtx = trace.setSpan(rootCtx, currentAgentSpan);
-
             agentLogger.info(
               `[Runner] *** TRANSFER: ${event.author} -> ${event.actions.transferToAgent} ***`
             );
@@ -273,9 +252,6 @@ export async function* runAgent(
                 yield { type: 'text', content: part.text };
               }
               if ('functionCall' in part && part.functionCall?.name) {
-                const callId = part.functionCall.id ?? part.functionCall.name;
-                const toolSpan = startToolSpan(part.functionCall.name, part.functionCall.args, currentAgentCtx);
-                openToolSpans.set(callId, toolSpan);
                 agentLogger.debug(
                   `[Runner] Tool call: ${part.functionCall.name}, args: ${JSON.stringify(part.functionCall.args)}`
                 );
@@ -288,23 +264,6 @@ export async function* runAgent(
                     },
                   },
                 };
-              }
-              if ('functionResponse' in part && part.functionResponse) {
-                const { id, name, response } = part.functionResponse as {
-                  id?: string;
-                  name?: string;
-                  response?: unknown;
-                };
-                const callId = id ?? name;
-                const toolSpan = callId ? openToolSpans.get(callId) : undefined;
-                if (toolSpan) {
-                  toolSpan.setAttribute(
-                    'gen_ai.tool.call.result',
-                    truncateForSpan(JSON.stringify(response))
-                  );
-                  toolSpan.end();
-                  openToolSpans.delete(callId);
-                }
               }
             }
           }
@@ -336,8 +295,9 @@ export async function* runAgent(
         lastErrorMessage = serialized;
         lastErrorCode = undefined;
         rootSpan.setStatus({ code: SpanStatusCode.ERROR, message: serialized });
+        const errorType = error instanceof Error ? error.constructor.name : typeof error;
         agentLogger.error(
-          { errorType: error?.constructor?.name, attempt: attempt + 1, message: serialized },
+          { errorType, attempt: attempt + 1, message: serialized },
           '[Runner] Exception during runAsync — will retry'
         );
       }
@@ -358,11 +318,6 @@ export async function* runAgent(
       yield { type: 'done' };
     }
   } finally {
-    for (const span of openToolSpans.values()) {
-      span.end();
-    }
-    openToolSpans.clear();
-    if (currentAgentSpan) currentAgentSpan.end();
     rootSpan.end();
   }
 }
