@@ -112,6 +112,31 @@ export function getAgentPrompt(
   return prompt;
 }
 
+/**
+ * Try to load settings, returning null if unavailable.
+ * Useful for module-level initialization where failure is acceptable.
+ */
+export function tryLoadSettings(): AppSettings | null {
+  try {
+    return loadSettings();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the ADK model name and custom prompt for a given agent.
+ * Returns defaults when settings are unavailable.
+ */
+export function getAgentConfig(
+  agentName: AgentName
+): { modelName: string; customPrompt: string | undefined } {
+  const settings = tryLoadSettings();
+  const modelName = settings ? getAdkModelName(agentName, settings) : 'gemini-2.5-flash';
+  const customPrompt = settings ? getAgentPrompt(agentName, settings) : undefined;
+  return { modelName, customPrompt };
+}
+
 export function clearSettingsCache(): void {
   cachedSettings = null;
   cachedRawSettings = null;

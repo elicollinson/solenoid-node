@@ -11,7 +11,8 @@
  */
 import { Box, useApp, useInput } from 'ink';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { getInterruptKey, loadSettings } from '../config/index.js';
+import { clearArtifacts } from '../artifacts/index.js';
+import { getInterruptKey, tryLoadSettings } from '../config/index.js';
 import { uiLogger } from '../utils/logger.js';
 import {
   ChatInput,
@@ -67,12 +68,11 @@ function AppContent() {
   const interruptKey = useMemo(() => getInterruptKey(), []);
 
   useEffect(() => {
-    uiLogger.debug('App useEffect: loading settings');
-    try {
-      loadSettings();
+    const settings = tryLoadSettings();
+    if (settings) {
       uiLogger.info('Settings loaded successfully');
-    } catch (error) {
-      uiLogger.warn({ error }, 'Settings not available');
+    } else {
+      uiLogger.warn('Settings not available');
     }
   }, []);
 
@@ -127,17 +127,15 @@ function AppContent() {
         setMessages((prev) => [...prev, agentList]);
         return true;
       }
-      default:
-        if (command.startsWith('/')) {
-          const unknownCmd: Message = {
-            id: crypto.randomUUID(),
-            role: 'system',
-            content: `Unknown command: ${command}. Type /help for available commands.`,
-          };
-          setMessages((prev) => [...prev, unknownCmd]);
-          return true;
-        }
-        return false;
+      default: {
+        const unknownCmd: Message = {
+          id: crypto.randomUUID(),
+          role: 'system',
+          content: `Unknown command: ${command}. Type /help for available commands.`,
+        };
+        setMessages((prev) => [...prev, unknownCmd]);
+        return true;
+      }
     }
   };
 
@@ -150,6 +148,9 @@ function AppContent() {
       handleSlashCommand(text);
       return;
     }
+
+    // Clear artifact store from previous turn
+    clearArtifacts();
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -164,6 +165,13 @@ function AppContent() {
     const assistantMessageId = crypto.randomUUID();
     const parts: MessagePart[] = [];
     const toolCallMap = new Map<string, ToolCall>();
+
+    // Helper to update only the assistant message being streamed
+    const updateAssistant = (updates: Partial<Message>): void => {
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, ...updates } : msg))
+      );
+    };
 
     setMessages((prev) => [
       ...prev,
@@ -191,17 +199,13 @@ function AppContent() {
               } else {
                 parts.push({ type: 'text', content: event.content });
               }
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        content: msg.content + event.content,
-                        parts: [...parts],
-                      }
-                    : msg
-                )
-              );
+              updateAssistant({
+                content: parts
+                  .filter((p) => p.type === 'text')
+                  .map((p) => p.content)
+                  .join(''),
+                parts: [...parts],
+              });
             }
             break;
 
@@ -215,11 +219,7 @@ function AppContent() {
               toolCallMap.set(event.toolCallId, newToolCall);
               parts.push({ type: 'tool_call', toolCall: newToolCall });
               setStatus(`Running: ${event.toolName}`);
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId ? { ...msg, parts: [...parts] } : msg
-                )
-              );
+              updateAssistant({ parts: [...parts] });
             }
             break;
 
@@ -232,11 +232,7 @@ function AppContent() {
                 } catch {
                   tc.args = { raw: event.toolArgs };
                 }
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessageId ? { ...msg, parts: [...parts] } : msg
-                  )
-                );
+                updateAssistant({ parts: [...parts] });
               }
             }
             break;
@@ -246,11 +242,7 @@ function AppContent() {
               const tc = toolCallMap.get(event.toolCallId);
               if (tc) {
                 tc.status = 'completed';
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === assistantMessageId ? { ...msg, parts: [...parts] } : msg
-                  )
-                );
+                updateAssistant({ parts: [...parts] });
               }
             }
             break;
@@ -258,11 +250,18 @@ function AppContent() {
           case 'transfer':
             if (event.transferTo) {
               setStatus(`Agent: ${event.transferTo}`);
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId ? { ...msg, agentName: event.transferTo } : msg
-                )
-              );
+
+              // Clear intermediate progression when response_formatting_agent takes over
+              if (event.transferTo === 'response_formatting_agent') {
+                const clearProgression =
+                  tryLoadSettings()?.display.clear_progression_on_final ?? true;
+                if (clearProgression) {
+                  parts.length = 0;
+                  toolCallMap.clear();
+                }
+              }
+
+              updateAssistant({ agentName: event.transferTo, parts: [...parts] });
             }
             break;
 
@@ -273,17 +272,10 @@ function AppContent() {
             break;
 
           case 'error':
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantMessageId
-                  ? {
-                      ...msg,
-                      content: `Error: ${event.error}`,
-                      isStreaming: false,
-                    }
-                  : msg
-              )
-            );
+            updateAssistant({
+              content: `Error: ${event.error}`,
+              isStreaming: false,
+            });
             break;
         }
       }
@@ -297,22 +289,10 @@ function AppContent() {
         }
       }
 
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, isStreaming: false, parts: [...parts], wasInterrupted }
-            : msg
-        )
-      );
+      updateAssistant({ isStreaming: false, parts: [...parts], wasInterrupted });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, content: `Error: ${errorMessage}`, isStreaming: false }
-            : msg
-        )
-      );
+      updateAssistant({ content: `Error: ${errorMessage}`, isStreaming: false });
     } finally {
       interruptRef.current = false;
       setIsProcessing(false);

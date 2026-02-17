@@ -16,8 +16,8 @@
  * - pyodide: WebAssembly Python runtime for secure sandboxed execution
  */
 import { LlmAgent } from '@google/adk';
-import type { AppSettings } from '../config/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { saveArtifactTool } from '../artifacts/index.js';
+import { getAgentConfig } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { executeCodeAdkTool } from '../tools/adk-tools.js';
 import { executeCode } from '../tools/code-execution.js';
@@ -65,23 +65,18 @@ Python standard library including:
 - Handle errors gracefully with try/except
 - Keep code focused and efficient
 
+### SAVING STRUCTURED OUTPUT
+When you produce tabular data or structured results, use the save_artifact tool to preserve them for rich rendering:
+- For tables: save_artifact with type "table", headers, and rows
+- For formatted text results: save_artifact with type "text" and content
+
 ### CONSTRAINTS
 - NEVER execute code that could be harmful
 - NEVER attempt file system operations outside the sandbox
 - ALWAYS use print() to output results
 ${TRANSFER_BACK_INSTRUCTION}`;
 
-// Load settings with fallback
-let settings: AppSettings | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
-
-const modelName = settings ? getAdkModelName('code_executor_agent', settings) : 'gemini-2.5-flash';
-
-const customPrompt = settings ? getAgentPrompt('code_executor_agent', settings) : undefined;
+const { modelName, customPrompt } = getAgentConfig('code_executor_agent');
 
 /**
  * Code Executor LlmAgent - Python execution specialist
@@ -92,7 +87,7 @@ export const codeExecutorAgent = new LlmAgent({
   description:
     'Python code execution specialist for calculations, algorithms, and data processing.',
   instruction: customPrompt ?? DEFAULT_INSTRUCTION,
-  tools: [executeCodeAdkTool],
+  tools: [executeCodeAdkTool, saveArtifactTool],
   afterModelCallback: saveMemoriesOnFinalResponse,
 });
 

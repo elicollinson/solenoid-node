@@ -34,6 +34,7 @@ export {
   chartGeneratorToolExecutors,
 } from './chart-generator.js';
 export { mcpAgent, createMcpAgent, mcpToolExecutors } from './mcp.js';
+export { responseFormattingAgent } from './response-formatter.js';
 
 // Factory
 export {

@@ -59,6 +59,12 @@ export const KeyboardConfigSchema = z
   })
   .default({});
 
+export const DisplayConfigSchema = z
+  .object({
+    clear_progression_on_final: z.boolean().default(true),
+  })
+  .default({});
+
 export const AppSettingsSchema = z.object({
   ollama_host: z.string().url().optional(),
   embeddings: EmbeddingsConfigSchema.default({}),
@@ -67,6 +73,7 @@ export const AppSettingsSchema = z.object({
   mcp_servers: z.record(z.string(), McpServerSchema).default({}),
   agent_prompts: AgentPromptsSchema.default({}),
   keyboard: KeyboardConfigSchema,
+  display: DisplayConfigSchema,
 });
 
 export type EmbeddingsConfig = z.infer<typeof EmbeddingsConfigSchema>;
@@ -78,6 +85,7 @@ export type McpHttpServer = z.infer<typeof McpHttpServerSchema>;
 export type McpServer = z.infer<typeof McpServerSchema>;
 export type AgentPrompts = z.infer<typeof AgentPromptsSchema>;
 export type KeyboardConfig = z.infer<typeof KeyboardConfigSchema>;
+export type DisplayConfig = z.infer<typeof DisplayConfigSchema>;
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 
 export const AGENT_NAMES = [
@@ -89,6 +97,7 @@ export const AGENT_NAMES = [
   'research_agent',
   'mcp_agent',
   'generic_executor_agent',
+  'response_formatting_agent',
 ] as const;
 
 export type AgentName = (typeof AGENT_NAMES)[number];

@@ -16,8 +16,7 @@
  * - @modelcontextprotocol/sdk: Official MCP client implementation
  */
 import { LlmAgent } from '@google/adk';
-import type { AppSettings } from '../config/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { getAgentConfig } from '../config/index.js';
 import { getMcpManager } from '../mcp/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { createMcpAdkTools } from '../tools/mcp-adk-adapter.js';
@@ -55,17 +54,7 @@ Success / Partial / Could Not Complete
 ### CONSTRAINTS
 ${TRANSFER_BACK_INSTRUCTION}`;
 
-// Load settings with fallback
-let settings: AppSettings | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
-
-const modelName = settings ? getAdkModelName('mcp_agent', settings) : 'gemini-2.5-flash';
-
-const customPrompt = settings ? getAgentPrompt('mcp_agent', settings) : undefined;
+const { modelName, customPrompt } = getAgentConfig('mcp_agent');
 
 /**
  * MCP Agent placeholder - tools are loaded dynamically

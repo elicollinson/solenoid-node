@@ -61,6 +61,12 @@ export function getDefaultSettings(): AppSettings {
     },
     mcp_servers: {},
     agent_prompts: {},
+    keyboard: {
+      interrupt: 'escape',
+    },
+    display: {
+      clear_progression_on_final: true,
+    },
   };
 }
 
@@ -138,7 +144,7 @@ export function generateSettings(options: GenerateSettingsOptions = {}): AppSett
 
   // Apply additional env vars
   if (additionalEnvVars) {
-    for (const [, config] of Object.entries(additionalEnvVars)) {
+    for (const config of Object.values(additionalEnvVars)) {
       setNestedValue(settings as Record<string, unknown>, config.settingsPath, config.value);
     }
   }

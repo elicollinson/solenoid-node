@@ -15,8 +15,8 @@
  * - @google/adk: LlmAgent for ADK-compatible agent
  */
 import { LlmAgent } from '@google/adk';
-import type { AppSettings } from '../config/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { saveArtifactTool } from '../artifacts/index.js';
+import { getAgentConfig } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
@@ -40,24 +40,17 @@ You handle general-purpose tasks. You are the "knowledge worker" for text-based 
 - Search the web for current information (use research_agent)
 - Access files or external systems (use mcp_agent)
 
+### SAVING STRUCTURED OUTPUT
+When you produce tabular data or structured content, use the save_artifact tool to preserve it for rich rendering:
+- For tables: save_artifact with type "table", headers, and rows
+- For formatted text: save_artifact with type "text" and content
+
 ### CONSTRAINTS
 - ALWAYS provide helpful, accurate responses
 - If asked to do something outside your capabilities, clearly state what agent should be used instead
 ${TRANSFER_BACK_INSTRUCTION}`;
 
-// Load settings with fallback
-let settings: AppSettings | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
-
-const modelName = settings
-  ? getAdkModelName('generic_executor_agent', settings)
-  : 'gemini-2.5-flash';
-
-const customPrompt = settings ? getAgentPrompt('generic_executor_agent', settings) : undefined;
+const { modelName, customPrompt } = getAgentConfig('generic_executor_agent');
 
 /**
  * Generic Executor LlmAgent - handles knowledge-based text tasks
@@ -68,6 +61,7 @@ export const genericAgent = new LlmAgent({
   description:
     'General-purpose knowledge worker for text-based tasks like writing, summarization, and analysis.',
   instruction: customPrompt ?? DEFAULT_INSTRUCTION,
+  tools: [saveArtifactTool],
   afterModelCallback: saveMemoriesOnFinalResponse,
 });
 

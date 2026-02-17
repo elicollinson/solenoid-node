@@ -19,6 +19,7 @@ import { Box, Text } from 'ink';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { useMemo } from 'react';
+import { getArtifact } from '../../artifacts/index.js';
 import { ChartRenderer, isChartToolCall } from './ChartRenderer.js';
 
 // Configure marked with terminal renderer.
@@ -82,6 +83,74 @@ interface MessageListProps {
   maxHeight?: number;
 }
 
+function formatTableAsMarkdown(
+  headers: string[],
+  rows: string[][]
+): string {
+  const headerRow = `| ${headers.join(' | ')} |`;
+  const separator = `| ${headers.map(() => '---').join(' | ')} |`;
+  const dataRows = rows
+    .map((row) => `| ${row.join(' | ')} |`)
+    .join('\n');
+  return `${headerRow}\n${separator}\n${dataRows}`;
+}
+
+function EmbedArtifactDisplay({ toolCall }: { toolCall: ToolCall }) {
+  const artifactId = toolCall.args?.artifactId as string | undefined;
+  if (!artifactId) {
+    return (
+      <Box paddingLeft={4} marginY={0}>
+        <Text color="red">embed_artifact: missing artifactId</Text>
+      </Box>
+    );
+  }
+
+  if (toolCall.status === 'running') {
+    return (
+      <Box paddingLeft={4} marginY={0}>
+        <Text color="yellow">◐ Embedding artifact...</Text>
+      </Box>
+    );
+  }
+
+  const artifact = getArtifact(artifactId);
+  if (!artifact) {
+    return (
+      <Box paddingLeft={4} marginY={0}>
+        <Text color="red">● Artifact {artifactId} not found</Text>
+      </Box>
+    );
+  }
+
+  if (artifact.type === 'chart') {
+    return (
+      <Box flexDirection="column" paddingLeft={2}>
+        <ChartRenderer toolArgs={artifact.data as Record<string, unknown>} />
+      </Box>
+    );
+  }
+
+  // Table and text artifacts share the same title + content layout
+  let markdownContent: string;
+  if (artifact.type === 'table') {
+    const { headers, rows } = artifact.data as { headers: string[]; rows: string[][] };
+    markdownContent = formatTableAsMarkdown(headers, rows);
+  } else {
+    markdownContent = (artifact.data as { content: string }).content;
+  }
+
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      {artifact.title && (
+        <Text bold color="cyan">
+          {artifact.title}
+        </Text>
+      )}
+      <Markdown>{markdownContent}</Markdown>
+    </Box>
+  );
+}
+
 function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
   const statusIcons = {
     pending: '○',
@@ -97,22 +166,27 @@ function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
     error: 'red',
   } as const;
 
-  // Render charts inline when the tool is render_chart and completed
-  if (isChartToolCall(toolCall.name) && toolCall.args && toolCall.status === 'completed') {
-    return (
-      <Box flexDirection="column" paddingLeft={2}>
-        <ChartRenderer toolArgs={toolCall.args} />
-      </Box>
-    );
+  // Render chart tool calls with special handling
+  if (isChartToolCall(toolCall.name)) {
+    if (toolCall.status === 'completed' && toolCall.args) {
+      return (
+        <Box flexDirection="column" paddingLeft={2}>
+          <ChartRenderer toolArgs={toolCall.args} />
+        </Box>
+      );
+    }
+    if (toolCall.status === 'running') {
+      return (
+        <Box paddingLeft={4} marginY={0}>
+          <Text color="yellow">{statusIcons.running} Generating chart...</Text>
+        </Box>
+      );
+    }
   }
 
-  // Render chart placeholder while running
-  if (isChartToolCall(toolCall.name) && toolCall.status === 'running') {
-    return (
-      <Box paddingLeft={4} marginY={0}>
-        <Text color="yellow">{statusIcons[toolCall.status]} Generating chart...</Text>
-      </Box>
-    );
+  // Render embedded artifacts inline
+  if (toolCall.name === 'embed_artifact') {
+    return <EmbedArtifactDisplay toolCall={toolCall} />;
   }
 
   return (

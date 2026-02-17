@@ -1,29 +1,15 @@
 /**
  * Chart Generator Agent (ADK)
  *
- * Data visualization specialist using ink-chart for terminal-based charts.
- * Creates inline charts for various data types including bar, line, pie,
- * and sparkline charts directly in the terminal UI.
- *
- * Supported chart types:
- * - Bar: Categories with values (horizontal bars)
- * - StackedBar: Parts of a whole or composition
- * - Line: Trends over time with multiple series
- * - Sparkline: Compact trend visualization
- *
- * AG-UI Protocol Compliance:
- * - Uses structured tool calls with JSON Schema parameters
- * - Tool call data is streamed to the frontend for rendering
- * - Charts are rendered inline in the chat using ink-chart components
- *
- * Google ADK Compatibility:
- * - Uses @google/adk LlmAgent for ADK-compatible agent
- * - Exports ADK-compatible FunctionTool for use with @google/adk
+ * Data visualization specialist for terminal-based charts (bar, stacked bar,
+ * line, sparkline). Tool call data is streamed to the frontend for inline
+ * rendering via ink-chart components.
  */
 import { FunctionTool, LlmAgent } from '@google/adk';
 import { z } from 'zod';
+import { saveArtifact } from '../artifacts/index.js';
 import { parseChartArgs } from '../charts/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { getAgentConfig } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { TRANSFER_BACK_INSTRUCTION } from './types.js';
 
@@ -112,13 +98,8 @@ Use these color names: "red", "green", "blue", "yellow", "cyan", "magenta", "whi
 ${TRANSFER_BACK_INSTRUCTION}`;
 
 /**
- * Google ADK FunctionTool for chart rendering.
- *
- * This tool is compatible with @google/adk's LlmAgent and follows
- * the ADK pattern of using Zod schemas for parameter validation.
- *
- * AG-UI Protocol: The tool returns structured data that the frontend
- * can use to render charts inline using ink-chart components.
+ * ADK FunctionTool for chart rendering.
+ * Returns structured data that the frontend renders inline via ink-chart.
  */
 export const renderChartAdkTool = new FunctionTool({
   name: 'render_chart',
@@ -172,72 +153,58 @@ Choose the appropriate chart type:
   }),
   execute: async (params) => {
     const result = parseChartArgs(params as Record<string, unknown>);
-    if (!result.success) {
-      return { status: 'error', error: result.error };
+    if (!result.success || !result.config) {
+      return { status: 'error', error: result.error ?? 'Invalid chart arguments' };
     }
-    const config = result.config!;
+    const { config } = result;
+
+    const artifactId = saveArtifact({
+      type: 'chart',
+      title: config.title,
+      data: params,
+      agentName: 'chart_generator_agent',
+    });
+
     return {
       status: 'success',
       chartType: config.chartType,
       title: config.title,
-      // Include the full config for AG-UI frontend rendering
+      artifactId,
       chartConfig: config,
     };
   },
 });
 
-// Load settings with fallback
-let settings: ReturnType<typeof loadSettings> | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
-
-const adkModelName = settings
-  ? getAdkModelName('chart_generator_agent', settings)
-  : 'gemini-2.5-flash';
-
-const customPrompt = settings ? getAgentPrompt('chart_generator_agent', settings) : undefined;
+const { modelName, customPrompt } = getAgentConfig('chart_generator_agent');
 
 /**
- * Chart Generator LlmAgent - ink-chart visualization specialist (Google ADK)
- *
- * This is the primary ADK-compatible agent that uses the Google ADK LlmAgent
- * with the renderChartAdkTool for terminal-based chart rendering.
+ * Chart Generator LlmAgent - ink-chart visualization specialist
  */
 export const chartGeneratorAgent = new LlmAgent({
   name: 'chart_generator_agent',
-  model: adkModelName,
+  model: modelName,
   description: 'Data visualization specialist that creates terminal charts using ink-chart.',
   instruction: customPrompt ?? DEFAULT_INSTRUCTION,
   tools: [renderChartAdkTool],
   afterModelCallback: saveMemoriesOnFinalResponse,
 });
 
-/**
- * Factory function for creating chart generator agent.
- * Returns the ADK LlmAgent for use in the agent hierarchy.
- */
+/** Factory function for backwards compatibility */
 export function createChartGeneratorAgent(): LlmAgent {
   return chartGeneratorAgent;
 }
 
-/**
- * Tool executors for the chart generator agent.
- * The render_chart tool parses the arguments and returns a success message.
- * The actual rendering happens on the frontend based on the tool call data.
- */
+/** Legacy tool executors for backwards compatibility */
 export const chartGeneratorToolExecutors: Record<
   string,
   (args: Record<string, unknown>) => Promise<string>
 > = {
   render_chart: async (args) => {
     const result = parseChartArgs(args);
-    if (!result.success) {
-      return `Error: ${result.error}`;
+    if (!result.success || !result.config) {
+      return `Error: ${result.error ?? 'Invalid chart arguments'}`;
     }
-    const config = result.config!;
+    const { config } = result;
     return `Chart rendered successfully: ${config.chartType} chart${config.title ? ` - "${config.title}"` : ''}`;
   },
 };

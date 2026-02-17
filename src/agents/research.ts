@@ -14,8 +14,7 @@
  * - @google/adk: LlmAgent for ADK-compatible agent
  */
 import { LlmAgent } from '@google/adk';
-import type { AppSettings } from '../config/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { getAgentConfig } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { braveSearchAdkTool, readWebpageAdkTool } from '../tools/adk-tools.js';
 import { TRANSFER_BACK_INSTRUCTION } from './types.js';
@@ -69,17 +68,7 @@ Structure your research report as:
 - Maximum 5 page reads per research task.
 ${TRANSFER_BACK_INSTRUCTION}`;
 
-// Load settings with fallback
-let settings: AppSettings | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
-
-const modelName = settings ? getAdkModelName('research_agent', settings) : 'gemini-2.5-flash';
-
-const customPrompt = settings ? getAgentPrompt('research_agent', settings) : undefined;
+const { modelName, customPrompt } = getAgentConfig('research_agent');
 
 /**
  * Research LlmAgent - web research specialist with search and web reading tools
@@ -93,15 +82,3 @@ export const researchAgent = new LlmAgent({
   tools: [braveSearchAdkTool, readWebpageAdkTool],
   afterModelCallback: saveMemoriesOnFinalResponse,
 });
-
-// // Legacy tool executors export for backwards compatibility
-// export const researchToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<string>> = {
-//   universal_search: async (args) => {
-//     const { braveSearch } = await import('../tools/brave-search.js');
-//     return braveSearch(args['query'] as string);
-//   },
-//   read_webpage: async (args) => {
-//     const { readWebpage } = await import('../tools/web-reader.js');
-//     return readWebpage(args['url'] as string);
-//   },
-// };

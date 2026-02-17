@@ -18,8 +18,7 @@
  */
 import { LlmAgent } from '@google/adk';
 
-import type { AppSettings } from '../config/index.js';
-import { getAdkModelName, getAgentPrompt, loadSettings } from '../config/index.js';
+import { getAgentConfig, tryLoadSettings } from '../config/index.js';
 import { saveMemoriesOnFinalResponse } from '../memory/callbacks.js';
 import { agentLogger } from '../utils/logger.js';
 
@@ -28,6 +27,7 @@ import { codeExecutorAgent } from './code-executor.js';
 import { genericAgent } from './generic.js';
 import { createMcpAgent } from './mcp.js';
 import { researchAgent } from './research.js';
+import { responseFormattingAgent } from './response-formatter.js';
 
 /**
  * Minimal context interface matching ADK's ReadonlyContext.
@@ -56,6 +56,7 @@ const DEFAULT_INSTRUCTION = `You are the Chief Planner. You coordinate a team of
 | chart_generator_agent | Charts and visualizations (Pygal) |
 | mcp_agent | Documentation lookup, file operations |
 | generic_executor_agent | Writing, summaries, agent creation, KB management |
+| response_formatting_agent | Compose final response with embedded charts/tables |
 
 ### MANDATORY WORKFLOW
 
@@ -83,8 +84,10 @@ If you receive a message about a previous error:
 - Choose a different agent or approach
 - Do NOT retry the same agent that failed
 
-**STEP 4: SYNTHESIZE AND RETURN**
-When all steps complete, combine results and transfer to parent.
+**STEP 4: FORMAT AND RETURN**
+When all steps complete:
+- If artifacts were created (charts, tables), transfer to response_formatting_agent to compose the final response with embedded rich content.
+- If simple text-only response (no artifacts), synthesize results yourself and transfer to parent.
 
 ### HANDLING INCOMPLETE REQUESTS
 When the user request is missing details:
@@ -101,15 +104,9 @@ When the user request is missing details:
 - ALWAYS transfer final result to parent agent when done
 - Sub-agents transfer back to you by default. You can chain agents by telling a sub-agent to transfer to another specific agent upon completion.`;
 
-// Load settings with fallback
-let settings: AppSettings | null;
-try {
-  settings = loadSettings();
-} catch {
-  settings = null;
-}
+const { modelName, customPrompt } = getAgentConfig('planning_agent');
+const settings = tryLoadSettings();
 
-const modelName = settings ? getAdkModelName('planning_agent', settings) : 'gemini-2.5-flash';
 agentLogger.info(
   `[Planning] Resolved model: ${modelName}, provider: ${settings?.models?.default?.provider ?? 'unknown'}`
 );
@@ -123,8 +120,6 @@ if (settings?.models?.default?.provider === 'gemini') {
     );
   }
 }
-
-const customPrompt = settings ? getAgentPrompt('planning_agent', settings) : undefined;
 
 /**
  * Dynamic instruction that includes plan state from session
@@ -164,6 +159,7 @@ Transfer back to planning_agent immediately.`,
     codeExecutorAgent,
     chartGeneratorAgent,
     initializedMcpAgent,
+    responseFormattingAgent,
     ...additionalSubAgents,
   ];
 
