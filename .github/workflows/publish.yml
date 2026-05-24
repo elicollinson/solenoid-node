@@ -25,9 +25,6 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Upgrade npm
-        run: npm install -g npm@latest
-
       - name: Determine publish type
         id: publish_type
         run: |
@@ -88,7 +85,7 @@ jobs:
       - name: Publish to npm
         run: |
           if [[ "${{ steps.publish_type.outputs.type }}" == "dev" ]]; then
-            npm publish --tag dev --access public --provenance
+            bun npm publish --tag dev --access public --provenance
           else
-            npm publish --access public --provenance
+            bun npm publish --access public --provenance
           fi
