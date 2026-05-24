@@ -10,7 +10,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -57,25 +57,23 @@ jobs:
         if: steps.publish_type.outputs.type == 'release'
         id: version_release
         run: |
+          # standard-version creates a commit and tag itself, so an identity
+          # must be configured before it runs.
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
           CURRENT=$(node -p "require('./package.json').version")
           echo "Current version: $CURRENT"
-          
-          # Run standard-version to bump version
+
           npx standard-version --release-as patch
-          
-          # Get the new version
+
           NEW=$(node -p "require('./package.json').version")
           echo "New version: $NEW"
           echo "version=$NEW" >> $GITHUB_OUTPUT
 
       - name: Push version bump
         if: steps.publish_type.outputs.type == 'release'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add package.json CHANGELOG.md
-          git commit -m "chore: release v${{ steps.version_release.outputs.version }}"
-          git push
+        run: git push --follow-tags
 
       - name: Create GitHub Release
         if: steps.publish_type.outputs.type == 'release'
