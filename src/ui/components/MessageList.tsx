@@ -83,15 +83,10 @@ interface MessageListProps {
   maxHeight?: number;
 }
 
-function formatTableAsMarkdown(
-  headers: string[],
-  rows: string[][]
-): string {
+function formatTableAsMarkdown(headers: string[], rows: string[][]): string {
   const headerRow = `| ${headers.join(' | ')} |`;
   const separator = `| ${headers.map(() => '---').join(' | ')} |`;
-  const dataRows = rows
-    .map((row) => `| ${row.join(' | ')} |`)
-    .join('\n');
+  const dataRows = rows.map((row) => `| ${row.join(' | ')} |`).join('\n');
   return `${headerRow}\n${separator}\n${dataRows}`;
 }
 

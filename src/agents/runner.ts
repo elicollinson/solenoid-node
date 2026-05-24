@@ -88,10 +88,7 @@ export function createUserContent(text: string): Content {
 /**
  * Retrieve an existing session or create a new one.
  */
-async function getOrCreateSession(
-  runner: InMemoryRunner,
-  sessionId: string
-): Promise<unknown> {
+async function getOrCreateSession(runner: InMemoryRunner, sessionId: string): Promise<unknown> {
   const params = { appName: APP_NAME, userId: 'default_user', sessionId };
   const existing = await runner.sessionService.getSession(params);
   if (existing) return existing;
@@ -145,10 +142,7 @@ function buildRetryMessage(
  * context active when the generator was created. This ensures ADK's internal spans
  * (invocation, invoke_agent, execute_tool) are properly parented under our root span.
  */
-function bindContextToAsyncGenerator<T>(
-  ctx: OtelContext,
-  gen: AsyncIterable<T>
-): AsyncIterable<T> {
+function bindContextToAsyncGenerator<T>(ctx: OtelContext, gen: AsyncIterable<T>): AsyncIterable<T> {
   const iter = gen[Symbol.asyncIterator]();
   return {
     [Symbol.asyncIterator]() {
