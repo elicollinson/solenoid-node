@@ -85,7 +85,7 @@ jobs:
       - name: Publish to npm
         run: |
           if [[ "${{ steps.publish_type.outputs.type }}" == "dev" ]]; then
-            npm publish --tag dev --access public
+            npm publish --tag dev --access public --oidc
           else
-            npm publish --access public
+            npm publish --access public --oidc
           fi
