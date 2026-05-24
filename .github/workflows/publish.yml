@@ -85,7 +85,7 @@ jobs:
       - name: Publish to npm
         run: |
           if [[ "${{ steps.publish_type.outputs.type }}" == "dev" ]]; then
-            bun npm publish --tag dev --access public --provenance
+            bun publish --tag dev --access public
           else
-            bun npm publish --access public --provenance
+            bun publish --access public
           fi
