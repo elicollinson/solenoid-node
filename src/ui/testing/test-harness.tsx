@@ -310,6 +310,7 @@ export class SolenoidTestHarness {
 
     // Press enter to submit
     this.instance!.stdin.write('\r');
+    await this.tick();
 
     // Wait for processing to complete
     await this.waitForIdle();

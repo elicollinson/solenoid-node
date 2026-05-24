@@ -12,7 +12,7 @@
  * - generateChartAdkTool: Generate Pygal charts in WASM sandbox
  */
 import { FunctionTool } from '@google/adk';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { braveSearch } from './brave-search.js';
 import { executeCode } from './code-execution.js';
 import { readWebpage } from './web-reader.js';

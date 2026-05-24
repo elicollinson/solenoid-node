@@ -10,7 +10,7 @@
  * - @modelcontextprotocol/sdk: MCP client for tool discovery
  */
 import { FunctionTool } from '@google/adk';
-import { type ZodTypeAny, z } from 'zod';
+import { type ZodTypeAny, z } from 'zod/v3';
 import { getMcpManager } from '../mcp/index.js';
 
 /**
@@ -80,8 +80,8 @@ function jsonSchemaToZod(schema: JsonSchemaProperty): ZodTypeAny {
 /**
  * Converts MCP tool input schema to Zod object schema
  */
-function mcpSchemaToZodObject(inputSchema: JsonSchema): z.ZodObject<Record<string, ZodTypeAny>> {
-  const shape: Record<string, ZodTypeAny> = {};
+function mcpSchemaToZodObject(inputSchema: JsonSchema): z.ZodObject<z.ZodRawShape> {
+  const shape: z.ZodRawShape = {};
 
   if (inputSchema.properties) {
     for (const [key, propSchema] of Object.entries(inputSchema.properties)) {

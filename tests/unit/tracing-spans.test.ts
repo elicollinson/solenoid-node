@@ -54,7 +54,7 @@ function getParentSpanId(span: ReadableSpan): string | undefined {
   const psc = (span as any).parentSpanContext;
   if (psc?.spanId) return psc.spanId;
   // Fallback for SDK v1.x
-  return span.parentSpanId;
+  return (span as unknown as { parentSpanId?: string }).parentSpanId;
 }
 
 function makeEvent(
@@ -177,7 +177,7 @@ function getSpanByName(spans: ReadableSpan[], name: string): ReadableSpan {
       `Expected 1 span named "${name}", found ${matches.length}. All spans: [${allNames}]`
     );
   }
-  return matches[0];
+  return matches[0]!;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +339,6 @@ describe('Tracing span hierarchy', () => {
 
     const rootSpans = getSpansByName(spans, 'solenoid.agent_run');
     expect(rootSpans).toHaveLength(1);
-    expect(rootSpans[0].status.code).toBe(2); // SpanStatusCode.ERROR = 2
+    expect(rootSpans[0]!.status.code).toBe(2); // SpanStatusCode.ERROR = 2
   });
 });

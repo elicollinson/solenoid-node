@@ -147,7 +147,7 @@ describe('Runner retry on empty model response', () => {
   it('retries on empty final event and succeeds', async () => {
     const messages: string[] = [];
     const runner = createMockRunner((params, callIndex) => {
-      messages.push(params.newMessage.parts[0].text);
+      messages.push(params.newMessage.parts[0]!.text);
       if (callIndex === 0) {
         return [makeEmptyFinalEvent()];
       }
@@ -162,11 +162,11 @@ describe('Runner retry on empty model response', () => {
     // Should yield status event before retry, then the recovered content
     const statusChunks = chunks.filter((c) => c.type === 'status');
     expect(statusChunks.length).toBe(1);
-    expect(statusChunks[0].content).toContain('Retrying');
+    expect(statusChunks[0]!.content).toContain('Retrying');
 
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toEqual([{ type: 'text', content: 'Recovered response' }]);
-    expect(chunks[chunks.length - 1].type).toBe('done');
+    expect(chunks[chunks.length - 1]!.type).toBe('done');
   });
 
   it('yields user-facing error with reason when all retries exhausted', async () => {
@@ -181,9 +181,9 @@ describe('Runner retry on empty model response', () => {
     // Final chunk should be user-facing error with the reason
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toHaveLength(1);
-    expect(textChunks[0].content).toContain('failed after 6 attempts');
-    expect(textChunks[0].content).toContain('empty response');
-    expect(chunks[chunks.length - 1].type).toBe('done');
+    expect(textChunks[0]!.content).toContain('failed after 6 attempts');
+    expect(textChunks[0]!.content).toContain('empty response');
+    expect(chunks[chunks.length - 1]!.type).toBe('done');
   });
 
   it('surfaces API error message in status events and final error', async () => {
@@ -204,7 +204,7 @@ describe('Runner retry on empty model response', () => {
     // Status event should show the actual API error
     const statusChunks = chunks.filter((c) => c.type === 'status');
     expect(statusChunks.length).toBe(1);
-    expect(statusChunks[0].content).toContain('high demand');
+    expect(statusChunks[0]!.content).toContain('high demand');
 
     // Should recover on retry
     const textChunks = chunks.filter((c) => c.type === 'text');
@@ -223,7 +223,7 @@ describe('Runner retry on empty model response', () => {
 
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toHaveLength(1);
-    expect(textChunks[0].content).toContain('Service temporarily unavailable');
+    expect(textChunks[0]!.content).toContain('Service temporarily unavailable');
   });
 
   it('does not retry when final event has content', async () => {
@@ -297,7 +297,7 @@ describe('Runner retry on empty model response', () => {
       },
     });
     // Status event before retry
-    expect(chunks[1].type).toBe('status');
+    expect(chunks[1]!.type).toBe('status');
     // Then the retry succeeds
     expect(chunks[2]).toEqual({ type: 'text', content: 'Here are the results' });
     expect(chunks[3]).toEqual({ type: 'done' });
@@ -318,7 +318,7 @@ describe('Runner retry on empty model response', () => {
     expect(callCount).toBe(2);
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toEqual([{ type: 'text', content: 'Recovered after error' }]);
-    expect(chunks[chunks.length - 1].type).toBe('done');
+    expect(chunks[chunks.length - 1]!.type).toBe('done');
   });
 
   it('retries multiple times before succeeding', async () => {
@@ -364,8 +364,8 @@ describe('Runner retry on empty model response', () => {
     expect(timestamps).toHaveLength(3);
 
     // First retry: ~1000ms, second retry: ~2000ms
-    const delay1 = timestamps[1] - timestamps[0];
-    const delay2 = timestamps[2] - timestamps[1];
+    const delay1 = timestamps[1]! - timestamps[0]!;
+    const delay2 = timestamps[2]! - timestamps[1]!;
     expect(delay1).toBeGreaterThanOrEqual(900);
     expect(delay2).toBeGreaterThanOrEqual(1800);
     expect(delay2).toBeGreaterThan(delay1);
@@ -385,9 +385,9 @@ describe('Runner retry on empty model response', () => {
 
     const statusChunks = chunks.filter((c) => c.type === 'status');
     expect(statusChunks).toHaveLength(3);
-    expect(statusChunks[0].content).toContain('1/5');
-    expect(statusChunks[1].content).toContain('2/5');
-    expect(statusChunks[2].content).toContain('3/5');
+    expect(statusChunks[0]!.content).toContain('1/5');
+    expect(statusChunks[1]!.content).toContain('2/5');
+    expect(statusChunks[2]!.content).toContain('3/5');
   });
 
   // --- New tests for error resilience and transfer handling ---
@@ -407,13 +407,13 @@ describe('Runner retry on empty model response', () => {
     expect(callCount).toBe(2);
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toEqual([{ type: 'text', content: 'Success after transfer error' }]);
-    expect(chunks[chunks.length - 1].type).toBe('done');
+    expect(chunks[chunks.length - 1]!.type).toBe('done');
   });
 
   it('sends error context in retry message after exception', async () => {
     const messages: string[] = [];
     const runner = createMockRunner((params, callIndex) => {
-      messages.push(params.newMessage.parts[0].text);
+      messages.push(params.newMessage.parts[0]!.text);
       if (callIndex === 0) {
         throw new Error('JSON.parse failed on model response');
       }
@@ -448,7 +448,7 @@ describe('Runner retry on empty model response', () => {
     const statusChunks = chunks.filter((c) => c.type === 'status');
     expect(statusChunks.length).toBeGreaterThanOrEqual(1);
     // The error should NOT appear as just "empty response" — it should contain the error details
-    expect(statusChunks[0].content).toContain('TRANSFER_FAIL');
+    expect(statusChunks[0]!.content).toContain('TRANSFER_FAIL');
   });
 
   it('recovers after multiple sequential exceptions', async () => {
@@ -466,7 +466,7 @@ describe('Runner retry on empty model response', () => {
     expect(callCount).toBe(4); // 3 failures + 1 success
     const textChunks = chunks.filter((c) => c.type === 'text');
     expect(textChunks).toEqual([{ type: 'text', content: 'Finally recovered' }]);
-    expect(chunks[chunks.length - 1].type).toBe('done');
+    expect(chunks[chunks.length - 1]!.type).toBe('done');
   });
 
   it('yields transfer chunks when transfer events are detected', async () => {
@@ -490,6 +490,6 @@ describe('Runner retry on empty model response', () => {
 
     const transferChunks = chunks.filter((c) => c.type === 'transfer');
     expect(transferChunks).toHaveLength(1);
-    expect(transferChunks[0].transferTo).toBe('research_agent');
+    expect(transferChunks[0]!.transferTo).toBe('research_agent');
   });
 });
