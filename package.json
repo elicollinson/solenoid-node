@@ -1,6 +1,6 @@
 {
-  "name": "solenoid",
-  "version": "2.0.0-alpha.1",
+  "name": "solenoid-node",
+  "version": "1.0.0",
   "description": "Multi-agent AI assistant with local LLM inference",
   "type": "module",
   "main": "src/index.ts",
@@ -8,10 +8,13 @@
   "bin": {
     "solenoid": "./src/cli.ts"
   },
+  "files": [
+    "src"
+  ],
   "scripts": {
     "dev": "bun run --watch src/cli.ts",
     "start": "bun run src/cli.ts",
-    "build": "bun build src/cli.ts --outdir dist --target bun",
+    "build": "bun build src/cli.ts --outdir dist --target node",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:coverage": "bun test --coverage",
@@ -31,6 +34,10 @@
   ],
   "author": "Eli Collinson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elicollinson/solenoid-node"
+  },
   "dependencies": {
     "@ag-ui/core": "^0.0.43",
     "@anthropic-ai/sdk": "^0.39.0",
@@ -42,25 +49,28 @@
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.210.0",
     "@opentelemetry/sdk-trace-base": "^2.1.0",
-    "@pppp606/ink-chart": "^0.2.4",
+    "@pppp606/ink-chart": "^0.2.5",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "hono": "^4.7.6",
-    "ink": "^5.2.0",
+    "ink": "^6.0.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "ollama": "^0.5.14",
-    "react": "^18.3.1",
+    "react": "^19.0.0",
     "yaml": "^2.7.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
-    "@types/react": "^18.3.18",
+    "@types/react": "^19.0.0",
     "bun-types": "^1.1.0",
     "ink-testing-library": "^4.0.0",
     "react-devtools-core": "^6.1.1",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "zod": "$zod"
   },
   "trustedDependencies": [
     "@biomejs/biome"

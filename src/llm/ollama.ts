@@ -27,9 +27,11 @@ export class OllamaProvider implements LLMProvider {
     const finalHost = host ?? getOllamaHost();
     const finalApiKey = apiKey ?? getOllamaApiKey();
 
-    const clientOptions: { host: string; apiKey?: string } = { host: finalHost };
+    // The ollama SDK has no apiKey option — pass the bearer token via headers
+    // so Ollama Cloud authenticates the request.
+    const clientOptions: { host: string; headers?: Record<string, string> } = { host: finalHost };
     if (finalApiKey) {
-      clientOptions.apiKey = finalApiKey;
+      clientOptions.headers = { Authorization: `Bearer ${finalApiKey}` };
     }
 
     this.client = new Ollama(clientOptions);

@@ -9,7 +9,7 @@
  * Follows the FunctionTool pattern from adk-tools.ts.
  */
 import { FunctionTool } from '@google/adk';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { getArtifact, listArtifacts, saveArtifact } from './store.js';
 
 /**

@@ -33,7 +33,7 @@ export type AdkAfterModelCallback = (params: {
  * Backwards-compatible stream chunk type for server API responses
  */
 export interface AgentStreamChunk {
-  type: 'text' | 'tool_call' | 'tool_result' | 'transfer' | 'status' | 'done';
+  type: 'text' | 'tool_call' | 'tool_result' | 'transfer' | 'status' | 'done' | 'error';
   content?: string;
   toolCall?: {
     function: {
@@ -43,6 +43,8 @@ export interface AgentStreamChunk {
   };
   toolResult?: { name: string; result: string };
   transferTo?: string;
+  error?: string;
+  [key: string]: unknown;
 }
 
 /**

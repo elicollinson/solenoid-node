@@ -63,9 +63,11 @@ export class OllamaLlm extends BaseLlm {
     const host = getOllamaHost();
     const apiKey = getOllamaApiKey();
 
-    const clientOptions: { host: string; apiKey?: string } = { host };
+    // The ollama SDK has no apiKey option — pass the bearer token via headers
+    // so Ollama Cloud authenticates the request.
+    const clientOptions: { host: string; headers?: Record<string, string> } = { host };
     if (apiKey) {
-      clientOptions.apiKey = apiKey;
+      clientOptions.headers = { Authorization: `Bearer ${apiKey}` };
     }
 
     this.client = new Ollama(clientOptions);
