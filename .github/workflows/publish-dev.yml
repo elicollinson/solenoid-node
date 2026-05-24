@@ -1,0 +1,38 @@
+name: Publish Dev Release
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Set dev version
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          # Create prerelease version: 2.0.0-alpha.1 -> 2.0.0-dev.2025052314
+          DEV_VERSION="${CURRENT%%-*}.dev$(date +%Y%m%d%H%M%S)"
+          echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
+          # Update package.json
+          node -e "const pkg=require('./package.json');pkg.version='$DEV_VERSION';require('fs').writeFileSync('./package.json',JSON.stringify(pkg,null,2)+'\n')"
+
+      - name: Publish to npm (tag: dev)
+        run: npm publish --tag dev --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
