@@ -263,7 +263,7 @@ export function getOllamaHost(settings?: AppSettings): string {
     return config.embeddings.host;
   } catch {
     // Default fallback to Ollama Cloud
-    return 'https://ollama.com/v1';
+    return 'https://ollama.com';
   }
 }
 

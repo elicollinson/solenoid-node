@@ -114,7 +114,7 @@ describe('Config Generator', () => {
       const settings = generateSettings();
 
       expect(settings.search.brave_search_api_key).toBe('');
-      expect(settings.ollama_host).toBe('https://ollama.com/v1');
+      expect(settings.ollama_host).toBe('https://ollama.com');
     });
 
     it('should inject BRAVE_SEARCH_API_KEY from env', () => {

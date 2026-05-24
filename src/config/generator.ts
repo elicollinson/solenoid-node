@@ -43,11 +43,11 @@ export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
  */
 export function getDefaultSettings(): AppSettings {
   return {
-    ollama_host: 'https://ollama.com/v1',
+    ollama_host: 'https://ollama.com',
     ollama_cloud_api_key: '',
     embeddings: {
       provider: 'ollama',
-      host: 'https://ollama.com/v1',
+      host: 'https://ollama.com',
       model: 'nomic-embed-text',
     },
     models: {
