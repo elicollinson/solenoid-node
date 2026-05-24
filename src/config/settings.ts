@@ -10,7 +10,7 @@
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { writeSettingsFile } from './generator.js';
 import {
@@ -261,7 +261,54 @@ export function getOllamaHost(settings?: AppSettings): string {
     // Backwards compat: embeddings.host
     return config.embeddings.host;
   } catch {
-    // Default fallback
-    return 'http://localhost:11434';
+    // Default fallback to Ollama Cloud
+    return 'https://ollama.com/v1';
   }
+}
+
+/**
+ * Get the Ollama API key from configuration, environment, or models.json.
+ * Priority: OLLAMA_CLOUD_API_KEY env var > ollama_cloud_api_key config > models.json
+ *
+ * @param settings - Optional settings object (will load if not provided)
+ * @returns Ollama API key or empty string
+ */
+export function getOllamaApiKey(settings?: AppSettings): string {
+  // Environment variable takes priority
+  if (process.env.OLLAMA_CLOUD_API_KEY) {
+    return process.env.OLLAMA_CLOUD_API_KEY;
+  }
+
+  // Try to load from config
+  try {
+    const config = settings ?? loadSettings();
+
+    // Config file setting
+    if (config.ollama_cloud_api_key) {
+      return config.ollama_cloud_api_key;
+    }
+  } catch {
+    // Ignore errors, continue to fallback
+  }
+
+  // Fallback: read from ~/.pi/agent/models.json
+  try {
+    const { homedir } = require('node:os');
+    const { readFileSync, existsSync } = require('node:fs');
+    const { join } = require('node:path');
+    const modelsJsonPath = join(homedir(), '.pi', 'agent', 'models.json');
+
+    if (existsSync(modelsJsonPath)) {
+      const content = readFileSync(modelsJsonPath, 'utf-8');
+      const modelsData = JSON.parse(content);
+
+      if (modelsData.providers?.['ollama-cloud']?.apiKey) {
+        return modelsData.providers['ollama-cloud'].apiKey;
+      }
+    }
+  } catch {
+    // Ignore errors, return empty string
+  }
+
+  return '';
 }

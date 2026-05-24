@@ -25,7 +25,7 @@ import type {
   Tool as OllamaTool,
   ToolCall as OllamaToolCall,
 } from 'ollama';
-import { getOllamaHost } from '../config/settings.js';
+import { getOllamaApiKey, getOllamaHost } from '../config/settings.js';
 import { agentLogger } from '../utils/logger.js';
 
 /** Maximum time to wait for an Ollama response before aborting (ms) */
@@ -59,9 +59,16 @@ export class OllamaLlm extends BaseLlm {
     // Strip 'ollama/' prefix for actual Ollama API calls
     this.actualModel = model.replace(/^ollama\//, '');
 
-    // Initialize Ollama client with host from config or env
+    // Initialize Ollama client with host and API key from config or env
     const host = getOllamaHost();
-    this.client = new Ollama({ host });
+    const apiKey = getOllamaApiKey();
+
+    const clientOptions: { host: string; apiKey?: string } = { host };
+    if (apiKey) {
+      clientOptions.apiKey = apiKey;
+    }
+
+    this.client = new Ollama(clientOptions);
   }
 
   /**

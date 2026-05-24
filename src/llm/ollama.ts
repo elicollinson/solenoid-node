@@ -9,6 +9,7 @@
  * - ollama: Official Ollama JavaScript client for local LLM inference
  */
 import { Ollama } from 'ollama';
+import { getOllamaApiKey, getOllamaHost } from '../config/settings.js';
 import type {
   ChatOptions,
   ChatResponse,
@@ -21,8 +22,17 @@ import type {
 export class OllamaProvider implements LLMProvider {
   private client: Ollama;
 
-  constructor(host = 'http://localhost:11434') {
-    this.client = new Ollama({ host });
+  constructor(host?: string, apiKey?: string) {
+    // Use provided values or get from config
+    const finalHost = host ?? getOllamaHost();
+    const finalApiKey = apiKey ?? getOllamaApiKey();
+
+    const clientOptions: { host: string; apiKey?: string } = { host: finalHost };
+    if (finalApiKey) {
+      clientOptions.apiKey = finalApiKey;
+    }
+
+    this.client = new Ollama(clientOptions);
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {

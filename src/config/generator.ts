@@ -35,6 +35,7 @@ export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
   { envVar: 'GOOGLE_API_KEY', settingsPath: ['search', 'google_api_key'] },
   { envVar: 'GOOGLE_CX', settingsPath: ['search', 'google_cx'] },
   { envVar: 'OLLAMA_HOST', settingsPath: ['ollama_host'] },
+  { envVar: 'OLLAMA_CLOUD_API_KEY', settingsPath: ['ollama_cloud_api_key'] },
 ];
 
 /**
@@ -42,17 +43,18 @@ export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
  */
 export function getDefaultSettings(): AppSettings {
   return {
-    ollama_host: 'http://localhost:11434',
+    ollama_host: 'https://ollama.com/v1',
+    ollama_cloud_api_key: '',
     embeddings: {
       provider: 'ollama',
-      host: 'http://localhost:11434',
+      host: 'https://ollama.com/v1',
       model: 'nomic-embed-text',
     },
     models: {
       default: {
-        name: 'ministral-3:8b-instruct-2512-q4_K_M',
+        name: 'gemma4:31b-cloud',
         provider: 'ollama_chat',
-        context_length: 128000,
+        context_length: 262144,
       },
     },
     search: {

@@ -67,6 +67,7 @@ export const DisplayConfigSchema = z
 
 export const AppSettingsSchema = z.object({
   ollama_host: z.string().url().optional(),
+  ollama_cloud_api_key: z.string().optional(),
   embeddings: EmbeddingsConfigSchema.default({}),
   models: ModelsConfigSchema,
   search: SearchConfigSchema.default({}),

@@ -62,7 +62,7 @@ describe('Config Generator', () => {
       const settings = getDefaultSettings();
 
       expect(settings.models.default.provider).toBe('ollama_chat');
-      expect(settings.models.default.context_length).toBe(128000);
+      expect(settings.models.default.context_length).toBe(262144);
     });
 
     it('should have correct default search config', () => {
@@ -114,7 +114,7 @@ describe('Config Generator', () => {
       const settings = generateSettings();
 
       expect(settings.search.brave_search_api_key).toBe('');
-      expect(settings.ollama_host).toBe('http://localhost:11434');
+      expect(settings.ollama_host).toBe('https://ollama.com/v1');
     });
 
     it('should inject BRAVE_SEARCH_API_KEY from env', () => {

@@ -77,6 +77,9 @@ sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), Mcp
 // Ollama host validator - URL string
 sectionValidators.set('ollama_host', createZodValidator(z.string().url()));
 
+// Ollama Cloud API key validator - string (can be empty)
+sectionValidators.set('ollama_cloud_api_key', createZodValidator(z.string()));
+
 sectionValidators.set('keyboard', createZodValidator(KeyboardConfigSchema));
 
 // Agent prompts validator - record of strings with min length
