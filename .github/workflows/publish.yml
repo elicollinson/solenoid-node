@@ -40,7 +40,7 @@ jobs:
         run: |
           CURRENT=$(node -p "require('./package.json').version")
           # Create prerelease version: 2.0.0 -> 2.0.0-dev.2025052314
-          DEV_VERSION="${CURRENT%%-*}.dev$(date +%Y%m%d%H%M%S)"
+          DEV_VERSION="${CURRENT%%-*}-dev.$(date +%Y%m%d%H%M%S)"
           echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
           echo "Dev version: $DEV_VERSION"
           # Update package.json
