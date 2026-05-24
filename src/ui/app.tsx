@@ -76,6 +76,12 @@ function AppContent() {
     }
   }, []);
 
+  // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
+  // useInput cleanup unrefs stdin, and an always-active no-op handler
+  // ensures at least one ref keeps the event loop alive between renders
+  // (e.g., while waiting at the prompt with no other useInput active).
+  useInput(() => {});
+
   // Escape key handler for non-chat screens
   useInput(
     (_char, key) => {
