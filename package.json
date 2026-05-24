@@ -1,5 +1,5 @@
 {
-  "name": "solenoid",
+  "name": "solenoid-node",
   "version": "1.0.0",
   "description": "Multi-agent AI assistant with local LLM inference",
   "type": "module",
