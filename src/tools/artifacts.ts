@@ -10,6 +10,9 @@
  * which is cleared before the next turn and changes nothing outside the
  * conversation. Marking them writes would put every table behind an approval
  * prompt and stop a failed attempt from moving to the next route.
+ *
+ * Their output is `agent` origin and is not screened: it holds only what the
+ * model passed in (titles, cells, ids) and this file's literals.
  */
 import { z } from 'zod';
 import { getArtifact, listArtifacts, saveArtifact } from '../artifacts/index.js';
@@ -22,6 +25,7 @@ Use this when you produce data tables or formatted text that should be preserved
 - For tables: provide type "table" with headers and rows
 - For text: provide type "text" with content`,
   kind: 'read',
+  outputOrigin: 'agent',
   schema: z.object({
     type: z.enum(['table', 'text']).describe('The artifact type'),
     title: z.string().optional().describe('Display title for the artifact'),
@@ -48,6 +52,7 @@ export const listArtifactsTool = defineTool({
   description:
     'List all artifacts created during the current turn: tables and text available for embedding.',
   kind: 'read',
+  outputOrigin: 'agent',
   schema: z.object({}),
   execute: () => ({
     artifacts: listArtifacts().map((a) => ({ id: a.id, type: a.type, title: a.title })),
@@ -59,6 +64,7 @@ export const embedArtifactTool = defineTool({
   description:
     'Embed a previously created artifact inline in your reply. The UI renders it as a rich element (table or formatted text) at this point in the response.',
   kind: 'read',
+  outputOrigin: 'agent',
   schema: z.object({
     artifactId: z.string().describe('The ID of the artifact to embed'),
   }),

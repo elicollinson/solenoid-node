@@ -2,8 +2,8 @@
  * Web Tools
  *
  * universal_search (Brave Search) and read_webpage, as agent tools. Both
- * return text written by strangers, so both outputs pass the injection screen
- * at the tool_output boundary like every other tool result.
+ * return text written by strangers, so both keep the default `external`
+ * output origin and pass the injection screen at the tool_output boundary.
  */
 import { z } from 'zod';
 import { defineTool } from '../core/index.js';

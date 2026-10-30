@@ -12,8 +12,8 @@
  *   validated with repair feedback.
  * - Cancellation: one AbortSignal reaches every model call, tool call and wait.
  * - Approvals: a write tool runs only after the run's approval handler allows it.
- * - Injection screening of untrusted text (input messages and tool results),
- *   through solenoid-security.
+ * - Injection screening of untrusted text (input messages and external tool
+ *   results), through solenoid-security.
  * - Streaming: every delta, turn, tool call and retry is reported as an
  *   `AgentEvent` while the run is in progress.
  *
@@ -84,7 +84,8 @@ export class AgentRunError extends Error {
 
 /**
  * Where untrusted text enters the loop: the messages a run starts from, and
- * every tool result. The model's own turns are not screened. They are not
+ * the result of every tool whose output is `external` (see ToolOutputOrigin
+ * in ./tools.ts). The model's own turns are not screened. They are not
  * untrusted text, and against the Gemma judge an ordinary planning turn
  * ("I should read that URL") was flagged often enough to stop a quarter of
  * everyday runs. Injected text is caught where it arrives, before the model
@@ -745,10 +746,12 @@ export class Agent {
             attempt.signal
           );
           const output = typeof result === 'string' ? result : JSON.stringify(result);
-          // Every tool result is screened. The screen subtracts what this
-          // repository wrote and judges the rest, so a result that is all our
-          // own scaffolding costs nothing.
-          const quarantined = await this.screen([output], 'tool_output', 'external', attempt.emit);
+          // Screened unless the tool declares its output the model's own text
+          // (see ToolOutputOrigin). The screen subtracts what this repository
+          // wrote and judges the rest.
+          const quarantined =
+            (tool.outputOrigin ?? 'external') === 'external' &&
+            (await this.screen([output], 'tool_output', 'external', attempt.emit));
           if (quarantined) {
             span.setAttributes({ 'tool.quarantined': true });
             this.log.warn({ tool: name }, '[tool] output quarantined: prompt injection detected');

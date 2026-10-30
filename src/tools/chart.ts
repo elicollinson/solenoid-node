@@ -6,6 +6,9 @@
  * tool only validates them and tells the model what was drawn. Nothing is
  * stored, so there is nothing for the model to embed a second time.
  *
+ * Its output is `agent` origin and is not screened: the chart type and title
+ * are the model's own arguments.
+ *
  * Data arrays are JSON strings rather than nested arrays, the shape every
  * backend's tool calling handled reliably.
  */
@@ -25,6 +28,7 @@ Chart types:
 
 Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
   kind: 'read',
+  outputOrigin: 'agent',
   schema: z.object({
     chartType: z
       .enum(['bar', 'stackedBar', 'line', 'sparkline'])

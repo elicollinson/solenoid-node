@@ -7,7 +7,7 @@
  *
  * Ported from Solenoid-Assistant src/core/tools.ts.
  */
-import { type ToolKind, authoredText } from '@elicollinson/solenoid-security';
+import { type TextOrigin, type ToolKind, authoredText } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
 
 export interface FunctionToolDefinition {
@@ -29,6 +29,21 @@ export interface FunctionToolDefinition {
  */
 export type { ToolKind };
 
+/**
+ * Who wrote what a tool returns, in solenoid-security's terms.
+ *
+ * - `external` (the default): text from outside this process, such as a web
+ *   page, a search result or an MCP server's reply. It is screened before the
+ *   model reads it.
+ * - `agent`: the tool only hands back what the model itself sent it, plus
+ *   this repository's literals (a chart drawn from its arguments, a table it
+ *   wrote). Like the model's own turns, it is not screened. Anything the
+ *   model put in those arguments was already screened when it entered.
+ *
+ * Claim `agent` only when no byte of the output comes from anywhere else.
+ */
+export type ToolOutputOrigin = Extract<TextOrigin, 'agent' | 'external'>;
+
 export interface ToolContext {
   signal?: AbortSignal;
 }
@@ -36,6 +51,8 @@ export interface ToolContext {
 export interface AgentTool<S extends z.ZodType = z.ZodType> {
   definition: FunctionToolDefinition;
   kind: ToolKind;
+  /** Absent means `external`: screened. */
+  outputOrigin?: ToolOutputOrigin;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }
@@ -45,6 +62,7 @@ export function defineTool<S extends z.ZodType>(config: {
   description: string;
   /** Required: an unclassified tool would have to be assumed a write. */
   kind: ToolKind;
+  outputOrigin?: ToolOutputOrigin;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }): AgentTool<S> {
@@ -57,6 +75,7 @@ export function defineTool<S extends z.ZodType>(config: {
   authoredText.offer(`tool:${config.name}`, config.description);
   return {
     kind: config.kind,
+    ...(config.outputOrigin ? { outputOrigin: config.outputOrigin } : {}),
     schema: config.schema,
     execute: config.execute,
     definition: {

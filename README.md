@@ -6,7 +6,7 @@ A single-agent harness with a React terminal UI, built on Bun. It runs Gemma 4 2
 
 - **One agent, one framework-free loop.** Tools, streaming, real cancellation and structured output. The core is in `src/core`.
 - **Model routes.** An ordered fallback chain: LM Studio first, OpenRouter second. If an attempt fails, the task restarts on the next route. Transient errors retry a bounded number of times first.
-- **Injection screening of untrusted text.** Your messages and every tool result (web pages, search results, MCP output) are judged by a self-hosted Gemma judge before the model reads them. What happens on a flag depends on who wrote the text (see [Screening](#screening)).
+- **Injection screening of untrusted text.** Your messages and every result that comes from outside (web pages, search results, MCP output) are judged by a self-hosted Gemma judge before the model reads them. What happens on a flag depends on who wrote the text (see [Screening](#screening)).
 - **Approval for writes.** A tool that changes something waits for your `y`/`n`. Reads never ask.
 - **Ink terminal UI.** Streaming markdown, tool-status lines, inline charts and tables, a settings editor and slash commands.
 - **Tools.** Brave web search, a web page reader, terminal charts and table artifacts, plus any number of **MCP servers** (stdio or HTTP).
@@ -89,7 +89,7 @@ Each turn streams `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, 
 | Anything of undeclared origin | input | Run stops |
 | Tool results (web pages, search, MCP) | tool output | That output is withheld from the model; run continues |
 
-The model's own turns are not screened: injected text is caught where it enters, before the model reads it.
+The model's own text is not screened. That covers its turns and the results of tools that only echo it back: charts and tables. Injected text is caught where it enters, before the model reads it. A tool says which kind it returns with `outputOrigin` (`external` by default, `agent` for the model's own text). MCP tools are always `external`.
 
 Text this repository wrote (tool descriptions, the system prompt) is subtracted before the judge looks. A screen that cannot reach a verdict fails closed. Already-screened history is not re-screened on later turns. Turn screening off with `screening.enabled: false`.
 

@@ -353,6 +353,40 @@ describe('Injection screening', () => {
     });
   });
 
+  test('output of agent origin is not screened; the default is screened', async () => {
+    const tool = (name: string, outputOrigin?: 'agent') =>
+      defineTool({
+        name,
+        description: `Return ${name}.`,
+        kind: 'read',
+        ...(outputOrigin ? { outputOrigin } : {}),
+        schema: z.object({}),
+        execute: () => `${name} output`,
+      });
+    const turn: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'a', name: 'draw', arguments: {} },
+        { id: 'b', name: 'fetch', arguments: {} },
+      ],
+    };
+    const provider = new ScriptedProvider('fake', [turn, say('done')]);
+    const seen: TextInput[] = [];
+    const agent = new Agent({
+      routes: [{ client: provider, model: 'm' }],
+      tools: [tool('draw', 'agent'), tool('fetch')],
+      screen: keywordScreen(seen),
+    });
+
+    await agent.runMessages([{ role: 'user', content: 'go', origin: 'operator' }]);
+
+    const screenedToolText = seen
+      .filter((input) => input.boundary === 'tool_output')
+      .map((input) => [input.content].flat().join());
+    expect(screenedToolText).toEqual(['fetch output']);
+  });
+
   test("the model's own turns are not screened", async () => {
     const seen: TextInput[] = [];
     const provider = new ScriptedProvider('fake', [
