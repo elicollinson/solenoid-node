@@ -6,13 +6,11 @@
  * - embed_artifact: place an artifact inline in the reply; the UI recognizes
  *   this call (like render_chart) and renders the stored content
  *
- * Classified as reads: they touch only this turn's in-memory display store,
- * which is cleared before the next turn and changes nothing outside the
- * conversation. Marking them writes would put every table behind an approval
- * prompt and stop a failed attempt from moving to the next route.
- *
- * Their output is `agent` origin and is not screened: it holds only what the
- * model passed in (titles, cells, ids) and this file's literals.
+ * Internal tools: they touch only this turn's in-memory display store, which
+ * is cleared before the next turn, and return only what the model passed in
+ * (titles, cells, ids) plus this file's literals. So they are neither
+ * screened nor put to approval, and they never keep a failed attempt from
+ * moving to the next route.
  */
 import { z } from 'zod';
 import { getArtifact, listArtifacts, saveArtifact } from '../artifacts/index.js';
@@ -24,8 +22,7 @@ export const saveArtifactTool = defineTool({
 Use this when you produce data tables or formatted text that should be preserved exactly as-is, then call embed_artifact where it belongs.
 - For tables: provide type "table" with headers and rows
 - For text: provide type "text" with content`,
-  kind: 'read',
-  outputOrigin: 'agent',
+  kind: 'internal',
   schema: z.object({
     type: z.enum(['table', 'text']).describe('The artifact type'),
     title: z.string().optional().describe('Display title for the artifact'),
@@ -51,8 +48,7 @@ export const listArtifactsTool = defineTool({
   name: 'list_artifacts',
   description:
     'List all artifacts created during the current turn: tables and text available for embedding.',
-  kind: 'read',
-  outputOrigin: 'agent',
+  kind: 'internal',
   schema: z.object({}),
   execute: () => ({
     artifacts: listArtifacts().map((a) => ({ id: a.id, type: a.type, title: a.title })),
@@ -63,8 +59,7 @@ export const embedArtifactTool = defineTool({
   name: 'embed_artifact',
   description:
     'Embed a previously created artifact inline in your reply. The UI renders it as a rich element (table or formatted text) at this point in the response.',
-  kind: 'read',
-  outputOrigin: 'agent',
+  kind: 'internal',
   schema: z.object({
     artifactId: z.string().describe('The ID of the artifact to embed'),
   }),

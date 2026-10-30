@@ -7,7 +7,7 @@
  *
  * Ported from Solenoid-Assistant src/core/tools.ts.
  */
-import { type TextOrigin, type ToolKind, authoredText } from '@elicollinson/solenoid-security';
+import { type ToolKind, authoredText } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
 
 export interface FunctionToolDefinition {
@@ -20,29 +20,26 @@ export interface FunctionToolDefinition {
 }
 
 /**
- * Whether a tool observes or changes the world (solenoid-security's type).
+ * What a tool touches. Classify by effect, not by how the name reads.
  *
- * "read" means it cannot change anything a later read would see. Classify by
- * effect, not by how the name reads; when it is genuinely arguable, it is a
- * write. The agent asks before a write runs (see `ApprovalHandler` in
- * ./agent.ts) and never before a read, and runs a turn's reads concurrently.
+ * - `read` / `write` (solenoid-security's ToolKind): the tool reaches the
+ *   world. A read observes it and cannot change anything a later read would
+ *   see; a write changes it. Both return text from outside this process, so
+ *   their output is screened before the model reads it. A write asks first
+ *   (see `ApprovalHandler` in ./agent.ts) and, once run, keeps a failed
+ *   attempt from being replayed on another route. When it is genuinely
+ *   arguable whether a tool changes anything, it is a write.
+ * - `internal`: the tool touches only this process. It returns what the model
+ *   sent it plus this repository's literals (a chart drawn from its
+ *   arguments, a table it wrote), so like the model's own turns its output
+ *   is not screened, and with nothing outside to change it never asks.
+ *
+ * External is the default in the sense that matters: `internal` must be
+ * claimed, and only when no byte of the output comes from anywhere else and
+ * nothing outside this process is touched. MCP tools are never internal.
+ * Reads and internal tools of one turn run concurrently.
  */
-export type { ToolKind };
-
-/**
- * Who wrote what a tool returns, in solenoid-security's terms.
- *
- * - `external` (the default): text from outside this process, such as a web
- *   page, a search result or an MCP server's reply. It is screened before the
- *   model reads it.
- * - `agent`: the tool only hands back what the model itself sent it, plus
- *   this repository's literals (a chart drawn from its arguments, a table it
- *   wrote). Like the model's own turns, it is not screened. Anything the
- *   model put in those arguments was already screened when it entered.
- *
- * Claim `agent` only when no byte of the output comes from anywhere else.
- */
-export type ToolOutputOrigin = Extract<TextOrigin, 'agent' | 'external'>;
+export type AgentToolKind = ToolKind | 'internal';
 
 export interface ToolContext {
   signal?: AbortSignal;
@@ -50,9 +47,7 @@ export interface ToolContext {
 
 export interface AgentTool<S extends z.ZodType = z.ZodType> {
   definition: FunctionToolDefinition;
-  kind: ToolKind;
-  /** Absent means `external`: screened. */
-  outputOrigin?: ToolOutputOrigin;
+  kind: AgentToolKind;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }
@@ -61,8 +56,7 @@ export function defineTool<S extends z.ZodType>(config: {
   name: string;
   description: string;
   /** Required: an unclassified tool would have to be assumed a write. */
-  kind: ToolKind;
-  outputOrigin?: ToolOutputOrigin;
+  kind: AgentToolKind;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }): AgentTool<S> {
@@ -75,7 +69,6 @@ export function defineTool<S extends z.ZodType>(config: {
   authoredText.offer(`tool:${config.name}`, config.description);
   return {
     kind: config.kind,
-    ...(config.outputOrigin ? { outputOrigin: config.outputOrigin } : {}),
     schema: config.schema,
     execute: config.execute,
     definition: {

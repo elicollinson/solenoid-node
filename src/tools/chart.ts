@@ -6,8 +6,8 @@
  * tool only validates them and tells the model what was drawn. Nothing is
  * stored, so there is nothing for the model to embed a second time.
  *
- * Its output is `agent` origin and is not screened: the chart type and title
- * are the model's own arguments.
+ * An internal tool: it touches nothing outside this process and returns only
+ * the model's own arguments, so it is neither screened nor approved.
  *
  * Data arrays are JSON strings rather than nested arrays, the shape every
  * backend's tool calling handled reliably.
@@ -27,8 +27,7 @@ Chart types:
 - sparkline: a compact one-line trend. sparklineData: '[5,10,3,8]'
 
 Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
-  kind: 'read',
-  outputOrigin: 'agent',
+  kind: 'internal',
   schema: z.object({
     chartType: z
       .enum(['bar', 'stackedBar', 'line', 'sparkline'])

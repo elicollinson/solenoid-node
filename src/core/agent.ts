@@ -12,8 +12,8 @@
  *   validated with repair feedback.
  * - Cancellation: one AbortSignal reaches every model call, tool call and wait.
  * - Approvals: a write tool runs only after the run's approval handler allows it.
- * - Injection screening of untrusted text (input messages and external tool
- *   results), through solenoid-security.
+ * - Injection screening of untrusted text (input messages and the results of
+ *   tools that reach the world), through solenoid-security.
  * - Streaming: every delta, turn, tool call and retry is reported as an
  *   `AgentEvent` while the run is in progress.
  *
@@ -38,8 +38,8 @@ import type { ChatMessage, ChatProvider, ThinkLevel, TokenUsage, ToolCall } from
 import type { Reviewer } from './reviewer.js';
 import {
   type AgentTool,
+  type AgentToolKind,
   type FunctionToolDefinition,
-  type ToolKind,
   toJsonSchema,
 } from './tools.js';
 import {
@@ -84,8 +84,8 @@ export class AgentRunError extends Error {
 
 /**
  * Where untrusted text enters the loop: the messages a run starts from, and
- * the result of every tool whose output is `external` (see ToolOutputOrigin
- * in ./tools.ts). The model's own turns are not screened. They are not
+ * the result of every tool that reaches the world (any kind but `internal`;
+ * see AgentToolKind in ./tools.ts). The model's own turns are not screened. They are not
  * untrusted text, and against the Gemma judge an ordinary planning turn
  * ("I should read that URL") was flagged often enough to stop a quarter of
  * everyday runs. Injected text is caught where it arrives, before the model
@@ -185,7 +185,7 @@ export type AgentEvent =
   | { type: 'reasoning_delta'; text: string }
   /** A turn finished and was added to the transcript. */
   | { type: 'assistant_turn'; message: ChatMessage }
-  | { type: 'tool_start'; id: string; name: string; kind: ToolKind | 'unknown'; args: unknown }
+  | { type: 'tool_start'; id: string; name: string; kind: AgentToolKind | 'unknown'; args: unknown }
   | ({ type: 'tool_end'; id: string; name: string; durationMs: number } & ToolOutcome)
   /** The turn in progress failed transiently and will be re-requested. Discard its partial output. */
   | { type: 'retry'; turn: number; delayMs: number; error: string }
@@ -545,8 +545,8 @@ export class Agent {
       }
 
       if (msg.toolCalls?.length) {
-        // One output per call, in call order. Reads run concurrently, screens
-        // included; a write waits for the calls before it and holds back the
+        // One output per call, in call order. Reads and internal tools run
+        // concurrently, screens included; a write waits for the calls before it and holds back the
         // ones after, because it may stop for approval and commits the attempt.
         const outputs: Array<Promise<string>> = [];
         let reads: Array<Promise<string>> = [];
@@ -575,7 +575,8 @@ export class Agent {
             continue;
           }
 
-          if (this.tools.get(call.name)?.kind === 'read') {
+          const kind = this.tools.get(call.name)?.kind;
+          if (kind === 'read' || kind === 'internal') {
             const output = this.runToolCall(call, attempt);
             reads.push(output);
             outputs.push(output);
@@ -720,7 +721,8 @@ export class Agent {
           // After the parse, so a call that cannot be made is refused on its
           // own terms rather than put to somebody; before the execute, which
           // is the only ordering that means anything.
-          if (this.requiresApproval(tool)) {
+          // Internal tools change nothing outside this process: nothing to ask.
+          if (tool.kind !== 'internal' && this.requiresApproval(tool)) {
             const gate = attempt.approve ?? currentToolGate();
             const verdict = await gate?.({
               tool: name,
@@ -746,11 +748,11 @@ export class Agent {
             attempt.signal
           );
           const output = typeof result === 'string' ? result : JSON.stringify(result);
-          // Screened unless the tool declares its output the model's own text
-          // (see ToolOutputOrigin). The screen subtracts what this repository
-          // wrote and judges the rest.
+          // Every result from the world is screened; an internal tool's is the
+          // model's own text (see AgentToolKind). The screen subtracts what
+          // this repository wrote and judges the rest.
           const quarantined =
-            (tool.outputOrigin ?? 'external') === 'external' &&
+            tool.kind !== 'internal' &&
             (await this.screen([output], 'tool_output', 'external', attempt.emit));
           if (quarantined) {
             span.setAttributes({ 'tool.quarantined': true });

@@ -353,13 +353,12 @@ describe('Injection screening', () => {
     });
   });
 
-  test('output of agent origin is not screened; the default is screened', async () => {
-    const tool = (name: string, outputOrigin?: 'agent') =>
+  test('internal tools are neither screened nor put to approval; reads are screened', async () => {
+    const tool = (name: string, kind: 'internal' | 'read') =>
       defineTool({
         name,
         description: `Return ${name}.`,
-        kind: 'read',
-        ...(outputOrigin ? { outputOrigin } : {}),
+        kind,
         schema: z.object({}),
         execute: () => `${name} output`,
       });
@@ -375,16 +374,24 @@ describe('Injection screening', () => {
     const seen: TextInput[] = [];
     const agent = new Agent({
       routes: [{ client: provider, model: 'm' }],
-      tools: [tool('draw', 'agent'), tool('fetch')],
+      tools: [tool('draw', 'internal'), tool('fetch', 'read')],
       screen: keywordScreen(seen),
+      requiresApproval: () => true,
     });
+    const asked: string[] = [];
 
-    await agent.runMessages([{ role: 'user', content: 'go', origin: 'operator' }]);
+    await agent.runMessages([{ role: 'user', content: 'go', origin: 'operator' }], {
+      approve: (req) => {
+        asked.push(req.tool);
+        return { allow: true };
+      },
+    });
 
     const screenedToolText = seen
       .filter((input) => input.boundary === 'tool_output')
       .map((input) => [input.content].flat().join());
     expect(screenedToolText).toEqual(['fetch output']);
+    expect(asked).toEqual(['fetch']);
   });
 
   test("the model's own turns are not screened", async () => {

@@ -89,7 +89,7 @@ Each turn streams `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, 
 | Anything of undeclared origin | input | Run stops |
 | Tool results (web pages, search, MCP) | tool output | That output is withheld from the model; run continues |
 
-The model's own text is not screened. That covers its turns and the results of tools that only echo it back: charts and tables. Injected text is caught where it enters, before the model reads it. A tool says which kind it returns with `outputOrigin` (`external` by default, `agent` for the model's own text). MCP tools are always `external`.
+The model's own text is not screened. That covers its turns and the results of tools that only echo it back: charts and tables. Injected text is caught where it enters, before the model reads it. A tool's `kind` says which it is: `read` and `write` tools reach the world and are screened, while `internal` tools touch only this process and are neither screened nor put to approval. `internal` has to be declared, and MCP tools are never internal.
 
 Text this repository wrote (tool descriptions, the system prompt) is subtracted before the judge looks. A screen that cannot reach a verdict fails closed. Already-screened history is not re-screened on later turns. Turn screening off with `screening.enabled: false`.
 
