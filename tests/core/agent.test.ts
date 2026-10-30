@@ -14,7 +14,6 @@ import {
   PromptInjectionDetectedError,
   PromptInjectionScreeningError,
   defineTool,
-  modelOutputForScreen,
 } from '../../src/core/index.js';
 
 type Step = ChatMessage | Error | ((messages: ChatMessage[], opts: ChatOptions) => ChatMessage);
@@ -293,14 +292,24 @@ describe('Injection screening', () => {
     });
   });
 
-  test('flagged model output aborts the run', async () => {
-    const provider = new ScriptedProvider('fake', [say('INJECT')]);
+  test("the model's own turns are not screened", async () => {
+    const seen: TextInput[] = [];
+    const provider = new ScriptedProvider('fake', [
+      call('echo', { text: 'INJECT' }),
+      say('INJECT'),
+    ]);
     const agent = new Agent({
       routes: [{ client: provider, model: 'm' }],
-      screen: keywordScreen(),
+      tools: [echoTool],
+      screen: keywordScreen(seen),
     });
 
-    await expect(agent.run('go')).rejects.toBeInstanceOf(PromptInjectionDetectedError);
+    expect(
+      await agent.runMessages([{ role: 'user', content: 'go', origin: 'operator' }])
+    ).toMatchObject({
+      output: 'INJECT',
+    });
+    expect(seen.map((s) => s.boundary)).toEqual(['input', 'tool_output']);
   });
 
   test('flagged operator input is observed, not refused', async () => {
@@ -377,22 +386,5 @@ describe('Structured output', () => {
     expect(output).toEqual({ answer: 42 });
     const rejection = provider.calls[1]!.find((m) => m.role === 'tool');
     expect(rejection?.content).toStartWith('Result rejected:');
-  });
-});
-
-describe('modelOutputForScreen', () => {
-  test('labels every part of the turn so the judge reads each for what it is', () => {
-    const text = modelOutputForScreen({
-      role: 'assistant',
-      content: 'Checking now.',
-      thinking: 'I should read the page.',
-      toolCalls: [{ id: '1', name: 'read_webpage', arguments: { url: 'https://example.com' } }],
-    });
-
-    expect(text).toBe(
-      'Assistant reasoning:\nI should read the page.\n\n' +
-        'Assistant reply:\nChecking now.\n\n' +
-        'Tool call read_webpage with arguments: {"url":"https://example.com"}'
-    );
   });
 });

@@ -12,7 +12,8 @@
  *   validated with repair feedback.
  * - Cancellation: one AbortSignal reaches every model call, tool call and wait.
  * - Approvals: a write tool runs only after the run's approval handler allows it.
- * - Injection screening at every boundary, through solenoid-security.
+ * - Injection screening of untrusted text (input messages and tool results),
+ *   through solenoid-security.
  * - Streaming: every delta, turn, tool call and retry is reported as an
  *   `AgentEvent` while the run is in progress.
  *
@@ -27,7 +28,6 @@ import {
   type TextInput,
   type TextOrigin,
   type ToolVerdict,
-  authoredText,
   currentToolGate,
 } from '@elicollinson/solenoid-security';
 import type { z } from 'zod';
@@ -49,13 +49,8 @@ import {
 
 export const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
-/**
- * What the model is told in place of a quarantined tool output. A literal of
- * this repository, registered so that a model quoting it back is not itself
- * judged an injection.
- */
+/** What the model is told in place of a quarantined tool output. */
 const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; output blocked.';
-authoredText.offer('agent:quarantine', QUARANTINE_NOTICE);
 
 /** Consecutive transient failures of one model call before the attempt fails. */
 const MAX_TRANSIENT_RETRIES = 4;
@@ -92,7 +87,15 @@ export class AgentRunError extends Error {
   }
 }
 
-export type ScreeningBoundary = 'input' | 'tool_output' | 'model_output' | 'reviewer_output';
+/**
+ * Where untrusted text enters the loop: the messages a run starts from, and
+ * every tool result. The model's own turns are not screened. They are not
+ * untrusted text, and against the Gemma judge an ordinary planning turn
+ * ("I should read that URL") was flagged often enough to stop a quarter of
+ * everyday runs. Injected text is caught where it arrives, before the model
+ * reads it.
+ */
+export type ScreeningBoundary = 'input' | 'tool_output';
 
 export class PromptInjectionDetectedError extends Error {
   readonly code = 'PROMPT_INJECTION_DETECTED';
@@ -220,7 +223,7 @@ export interface AgentOptions {
   /** Name shown on the AGENT root span. */
   name?: string;
   /**
-   * Screen inputs and every untrusted output boundary. Omit only where the
+   * Screen input messages and tool results. Omit only where the
    * caller has decided there is nothing to screen; there is no default
    * detector because the core reads no configuration.
    */
@@ -548,7 +551,6 @@ export class Agent {
       }
       if (msg.usage) emit({ type: 'usage', usage: msg.usage });
 
-      await this.screen([modelOutputForScreen(msg)], 'model_output', 'external', emit);
       msg.screened = true;
       messages.push(msg); // keep the native payload for continuation
       emit({ type: 'assistant_turn', message: msg });
@@ -692,7 +694,6 @@ export class Agent {
         { [SemanticConventions.INPUT_VALUE]: output },
         async (span) => {
           const review = await awaitWithSignal(reviewer.review(context), attempt.signal);
-          await this.screen([review.feedback], 'reviewer_output', 'external', attempt.emit);
           span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(review));
           return review;
         }
@@ -900,24 +901,6 @@ function validateStructured(
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: message.length > 2_000 ? `${message.slice(0, 2_000)}…` : message };
   }
-}
-
-/**
- * One assistant turn as the injection screen should read it: each part
- * labelled for what it is. Not cosmetic. The Assistant joined the raw parts
- * with newlines, and against the Gemma judge an ordinary turn — reasoning
- * that ends "I should try read_webpage on that URL", followed by the call's
- * bare JSON — scored 0.9 and aborted the run, while each part alone scored 0
- * and the labelled form scores about 0. Every part is still screened.
- */
-export function modelOutputForScreen(msg: ChatMessage): string {
-  const sections: string[] = [];
-  if (msg.thinking?.trim()) sections.push(`Assistant reasoning:\n${msg.thinking}`);
-  if (msg.content.trim()) sections.push(`Assistant reply:\n${msg.content}`);
-  for (const call of msg.toolCalls ?? []) {
-    sections.push(`Tool call ${call.name} with arguments: ${safeJson(call.arguments)}`);
-  }
-  return sections.join('\n\n');
 }
 
 function failed(message: string): ToolOutcome {
