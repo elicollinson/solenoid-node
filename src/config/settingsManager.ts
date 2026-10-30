@@ -11,13 +11,14 @@ export interface SectionInfo {
 
 // Known section metadata (for display only)
 const KNOWN_SECTIONS: Record<string, { displayName: string; description: string }> = {
-  ollama_host: { displayName: 'Ollama Host', description: 'Ollama server URL' },
-  models: { displayName: 'Models', description: 'Model configurations' },
+  providers: { displayName: 'Providers', description: 'LM Studio and OpenRouter connections' },
+  routes: { displayName: 'Routes', description: 'Ordered model fallback chain' },
+  agent: { displayName: 'Agent', description: 'Reasoning, deadline and system prompt' },
+  screening: { displayName: 'Screening', description: 'Prompt-injection judge' },
   search: { displayName: 'Search', description: 'Web search provider' },
   mcp_servers: { displayName: 'MCP Servers', description: 'MCP server connections' },
-  agent_prompts: { displayName: 'Agent Prompts', description: 'System prompts for agents' },
-  embeddings: { displayName: 'Embeddings', description: 'Embedding model config' },
   keyboard: { displayName: 'Keyboard', description: 'Keyboard shortcut configuration' },
+  display: { displayName: 'Display', description: 'Chat display preferences' },
 };
 
 /**

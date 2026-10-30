@@ -1,1 +1,1 @@
-export { useAgent, type AgentEvent } from './useAgent.js';
+export { currentHarness, useAgent } from './useAgent.js';

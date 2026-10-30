@@ -3,7 +3,7 @@
  *
  * Tests for tool call state transitions and event handling.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SolenoidTestHarness } from '../../src/ui/testing/index.js';
 
 describe('Tool Call Lifecycle', () => {
@@ -129,9 +129,7 @@ describe('Tool Call Lifecycle', () => {
     });
 
     // Find first text event after tools
-    const textAfterTools = events.findIndex(
-      (e, i) => e.type === 'text' && i > lastToolEndIndex
-    );
+    const textAfterTools = events.findIndex((e, i) => e.type === 'text' && i > lastToolEndIndex);
 
     expect(textAfterTools).toBeGreaterThan(lastToolEndIndex);
   });
@@ -160,12 +158,8 @@ describe('Tool Call Lifecycle', () => {
 
     // Each ID should have corresponding args and end events
     for (const id of toolCallIds) {
-      const hasArgs = events.some(
-        (e) => e.type === 'tool_args' && e.toolCallId === id
-      );
-      const hasEnd = events.some(
-        (e) => e.type === 'tool_end' && e.toolCallId === id
-      );
+      const hasArgs = events.some((e) => e.type === 'tool_args' && e.toolCallId === id);
+      const hasEnd = events.some((e) => e.type === 'tool_end' && e.toolCallId === id);
 
       expect(hasArgs).toBe(true);
       expect(hasEnd).toBe(true);

@@ -5,7 +5,6 @@
  * decodes entities, and cleans whitespace. Truncates content to 10,000
  * characters to stay within LLM context limits.
  */
-import type { ToolDefinition } from '../llm/types.js';
 import { fetchWithTimeout } from '../utils/fetch.js';
 
 const MAX_CONTENT_LENGTH = 10000;
@@ -70,22 +69,3 @@ function extractTextFromHtml(html: string): string {
 
   return text.trim();
 }
-
-export const readWebpageToolDef: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'read_webpage',
-    description:
-      'Reads the content of a web page and returns the text. Use this to get detailed information from a specific URL.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'The URL of the web page to read',
-        },
-      },
-      required: ['url'],
-    },
-  },
-};

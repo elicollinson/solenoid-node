@@ -4,7 +4,7 @@
  * Manages connections to Model Context Protocol (MCP) servers. Handles
  * server discovery from configuration, connection establishment (stdio or HTTP),
  * tool discovery, and tool invocation. Supports multiple concurrent server
- * connections with namespaced tool names.
+ * connections with namespaced tool names, exposed to the agent as AgentTools.
  *
  * Dependencies:
  * - @modelcontextprotocol/sdk: Official MCP client SDK for server communication
@@ -14,10 +14,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { AppSettings } from '../config/index.js';
-import { loadSettings } from '../config/index.js';
+import { z } from 'zod';
 import type { McpServer, McpStdioServer } from '../config/schema.js';
-import type { ToolDefinition } from '../llm/types.js';
+import type { AgentTool, ToolKind } from '../core/index.js';
 import { serverLogger } from '../utils/logger.js';
 
 interface McpTool {
@@ -25,6 +24,7 @@ interface McpTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  kind: ToolKind;
 }
 
 export class McpManager {
@@ -32,28 +32,22 @@ export class McpManager {
   private tools: Map<string, McpTool> = new Map();
   private initialized = false;
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
+  /** Connect to every configured server. Returns the names that failed. */
+  async initialize(servers: Record<string, McpServer>): Promise<string[]> {
+    if (this.initialized) return [];
 
-    let settings: AppSettings;
-    try {
-      settings = loadSettings();
-    } catch {
-      serverLogger.warn('MCP: No settings found, skipping MCP server connections');
-      this.initialized = true;
-      return;
-    }
-
-    const servers = settings.mcp_servers;
+    const failures: string[] = [];
     for (const [name, config] of Object.entries(servers)) {
       try {
         await this.connectServer(name, config);
       } catch (error) {
-        serverLogger.warn({ error }, `MCP: Failed to connect to ${name}`);
+        failures.push(name);
+        serverLogger.warn({ error: String(error) }, `MCP: Failed to connect to ${name}`);
       }
     }
 
     this.initialized = true;
+    return failures;
   }
 
   private async connectServer(name: string, config: McpServer): Promise<void> {
@@ -90,6 +84,10 @@ export class McpManager {
         name: tool.name,
         description: tool.description ?? '',
         inputSchema: tool.inputSchema as Record<string, unknown>,
+        // A server only tells us whether a call changes anything through the
+        // readOnlyHint annotation. Without it, nothing here can work it out,
+        // so the tool is a write and asks before it runs.
+        kind: tool.annotations?.readOnlyHint === true ? 'read' : 'write',
       });
     }
 
@@ -100,40 +98,45 @@ export class McpManager {
     return 'command' in config;
   }
 
-  getToolDefinitions(): ToolDefinition[] {
-    const definitions: ToolDefinition[] = [];
-
-    for (const [fullName, tool] of this.tools) {
-      definitions.push({
-        type: 'function',
+  /**
+   * Every discovered tool as an AgentTool. Built by hand rather than through
+   * defineTool: a remote server's description is that server's text, not
+   * ours, and must never be registered as authored text the injection screen
+   * would subtract. The argument schema is permissive because the server
+   * validates its own arguments.
+   */
+  getAgentTools(): AgentTool[] {
+    return [...this.tools].map(([fullName, tool]) => ({
+      kind: tool.kind,
+      schema: z.record(z.string(), z.unknown()),
+      definition: {
+        type: 'function' as const,
         function: {
           name: fullName,
           description: `[MCP:${tool.serverName}] ${tool.description}`,
-          parameters: {
-            type: 'object',
-            properties:
-              ((tool.inputSchema as { properties?: Record<string, unknown> }).properties as Record<
-                string,
-                { type: string; description: string }
-              >) ?? {},
-            required: (tool.inputSchema as { required?: string[] }).required,
-          },
+          parameters: { type: 'object', properties: {}, ...tool.inputSchema },
         },
-      });
-    }
-
-    return definitions;
+      },
+      execute: async (args: unknown) => {
+        const result = await this.callTool(fullName, args as Record<string, unknown>);
+        if (!result.ok) throw new Error(result.output);
+        return result.output;
+      },
+    }));
   }
 
-  async callTool(fullName: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(
+    fullName: string,
+    args: Record<string, unknown>
+  ): Promise<{ ok: boolean; output: string }> {
     const tool = this.tools.get(fullName);
     if (!tool) {
-      return `Error: Unknown MCP tool: ${fullName}`;
+      return { ok: false, output: `Unknown MCP tool: ${fullName}` };
     }
 
     const client = this.clients.get(tool.serverName);
     if (!client) {
-      return `Error: MCP server not connected: ${tool.serverName}`;
+      return { ok: false, output: `MCP server not connected: ${tool.serverName}` };
     }
 
     try {
@@ -152,10 +155,11 @@ export class McpManager {
         .map((c) => c.text)
         .join('\n');
 
-      return textContent || JSON.stringify(result.content);
+      const output = textContent || JSON.stringify(result.content);
+      return { ok: result.isError !== true, output };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      return `Error calling MCP tool ${fullName}: ${message}`;
+      return { ok: false, output: `Error calling MCP tool ${fullName}: ${message}` };
     }
   }
 

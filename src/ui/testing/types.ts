@@ -4,7 +4,21 @@
  * Type definitions for the Solenoid testing infrastructure.
  */
 import type { Message, MessagePart, ToolCall } from '../components/index.js';
-import type { AgentEvent } from '../hooks/useAgent.js';
+
+/**
+ * The event stream the test harness's agents produce. The live UI consumes
+ * core AgentEvents directly; the harness keeps this flatter shape so its
+ * scripted mock responses stay simple.
+ */
+export interface AgentEvent {
+  type: 'text' | 'tool_start' | 'tool_args' | 'tool_end' | 'transfer' | 'status' | 'done' | 'error';
+  content?: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolArgs?: string;
+  transferTo?: string;
+  error?: string;
+}
 
 /**
  * Structured representation of the current UI state.
@@ -153,8 +167,8 @@ export interface TestHarnessConfig {
   debug?: boolean;
 
   /**
-   * Use real Ollama agent instead of mock.
-   * Requires Ollama to be running with appropriate model.
+   * Use the real harness instead of the mock agent.
+   * Requires LM Studio serving the configured model (default google/gemma-4-26b-a4b).
    * @default false
    */
   useRealAgent?: boolean;
@@ -191,4 +205,4 @@ export interface CommandResult {
 }
 
 // Re-export commonly used types
-export type { Message, ToolCall, MessagePart, AgentEvent };
+export type { Message, ToolCall, MessagePart };

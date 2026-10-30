@@ -2,8 +2,8 @@
  * Settings Loader
  *
  * Loads and caches application configuration from app_settings.yaml. Searches
- * for the config file starting from the current directory up to root. Provides
- * helper functions to get model configs and agent prompts with fallback defaults.
+ * from ~/.solenoid/app_settings.yaml. Provides helpers for provider credentials
+ * and UI preferences with fallback defaults.
  *
  * Dependencies:
  * - yaml: YAML parser for reading configuration files
@@ -13,13 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { writeSettingsFile } from './generator.js';
-import {
-  AGENT_NAMES,
-  type AgentName,
-  type AppSettings,
-  AppSettingsSchema,
-  type ModelConfig,
-} from './schema.js';
+import { type AppSettings, AppSettingsSchema, type ProviderName } from './schema.js';
 
 const DEFAULT_SETTINGS_FILENAME = 'app_settings.yaml';
 const SOLENOID_CONFIG_DIR = '.solenoid';
@@ -63,11 +57,11 @@ export function loadSettings(path?: string): AppSettings {
   }
 
   const content = readFileSync(configPath, 'utf-8');
-  const raw = parseYaml(content) as Record<string, unknown>;
+  const raw = (parseYaml(content) ?? {}) as Record<string, unknown>;
   const result = AppSettingsSchema.safeParse(raw);
 
   if (!result.success) {
-    const errors = result.error.errors
+    const errors = result.error.issues
       .map((e) => `  - ${e.path.join('.')}: ${e.message}`)
       .join('\n');
     throw new Error(`Invalid configuration in ${configPath}:\n${errors}`);
@@ -78,38 +72,6 @@ export function loadSettings(path?: string): AppSettings {
   settingsPath = configPath;
 
   return result.data;
-}
-
-export function getModelConfig(agentName: AgentName, settings?: AppSettings): ModelConfig {
-  const config = settings ?? loadSettings();
-
-  const agentConfig = config.models.agents?.[agentName];
-  if (agentConfig) {
-    return {
-      name: agentConfig.name ?? config.models.default.name,
-      provider: agentConfig.provider ?? config.models.default.provider,
-      context_length: agentConfig.context_length ?? config.models.default.context_length,
-    };
-  }
-
-  return config.models.default;
-}
-
-export function getAgentPrompt(
-  agentName: AgentName,
-  settings?: AppSettings,
-  variables?: Record<string, string>
-): string | undefined {
-  const config = settings ?? loadSettings();
-  let prompt = config.agent_prompts[agentName];
-
-  if (prompt && variables) {
-    for (const [key, value] of Object.entries(variables)) {
-      prompt = prompt.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
-    }
-  }
-
-  return prompt;
 }
 
 /**
@@ -124,28 +86,10 @@ export function tryLoadSettings(): AppSettings | null {
   }
 }
 
-/**
- * Resolve the ADK model name and custom prompt for a given agent.
- * Returns defaults when settings are unavailable.
- */
-export function getAgentConfig(agentName: AgentName): {
-  modelName: string;
-  customPrompt: string | undefined;
-} {
-  const settings = tryLoadSettings();
-  const modelName = settings ? getAdkModelName(agentName, settings) : 'gemini-2.5-flash';
-  const customPrompt = settings ? getAgentPrompt(agentName, settings) : undefined;
-  return { modelName, customPrompt };
-}
-
 export function clearSettingsCache(): void {
   cachedSettings = null;
   cachedRawSettings = null;
   settingsPath = null;
-}
-
-export function isValidAgentName(name: string): name is AgentName {
-  return AGENT_NAMES.includes(name as AgentName);
 }
 
 /**
@@ -206,25 +150,6 @@ export function saveSettings(settings: Record<string, unknown>): void {
 }
 
 /**
- * Get the ADK-compatible model name with provider prefix.
- * For ollama_chat provider, prepends 'ollama/' to enable ADK LLMRegistry routing.
- *
- * @param agentName - The agent name to get model for
- * @param settings - Optional settings object (will load if not provided)
- * @returns Model name with appropriate prefix for ADK
- */
-export function getAdkModelName(agentName: AgentName, settings?: AppSettings): string {
-  const config = getModelConfig(agentName, settings);
-
-  // Add ollama/ prefix for ollama_chat provider so ADK routes to OllamaLlm
-  if (config.provider === 'ollama_chat') {
-    return `ollama/${config.name}`;
-  }
-
-  return config.name;
-}
-
-/**
  * Get the configured interrupt key.
  * Returns 'escape' if settings are unavailable.
  */
@@ -237,79 +162,21 @@ export function getInterruptKey(): string {
   }
 }
 
-/**
- * Get the Ollama host URL from configuration or environment.
- * Priority: OLLAMA_HOST env var > ollama_host config > embeddings.host config > default
- *
- * @param settings - Optional settings object (will load if not provided)
- * @returns Ollama host URL
- */
-export function getOllamaHost(settings?: AppSettings): string {
-  // Environment variable takes priority
-  if (process.env.OLLAMA_HOST) {
-    return process.env.OLLAMA_HOST;
-  }
-
-  // Try to load from config
-  try {
-    const config = settings ?? loadSettings();
-
-    // Top-level ollama_host field
-    if (config.ollama_host) {
-      return config.ollama_host;
-    }
-
-    // Backwards compat: embeddings.host
-    return config.embeddings.host;
-  } catch {
-    // Default fallback to Ollama Cloud
-    return 'https://ollama.com';
-  }
-}
+const PROVIDER_KEY_ENV: Record<ProviderName, string> = {
+  lmstudio: 'LMSTUDIO_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+};
 
 /**
- * Get the Ollama API key from configuration, environment, or models.json.
- * Priority: OLLAMA_CLOUD_API_KEY env var > ollama_cloud_api_key config > models.json
- *
- * @param settings - Optional settings object (will load if not provided)
- * @returns Ollama API key or empty string
+ * The API key for a provider. The environment variable wins over the
+ * settings file so secrets can stay out of it.
  */
-export function getOllamaApiKey(settings?: AppSettings): string {
-  // Environment variable takes priority
-  if (process.env.OLLAMA_CLOUD_API_KEY) {
-    return process.env.OLLAMA_CLOUD_API_KEY;
-  }
-
-  // Try to load from config
-  try {
-    const config = settings ?? loadSettings();
-
-    // Config file setting
-    if (config.ollama_cloud_api_key) {
-      return config.ollama_cloud_api_key;
-    }
-  } catch {
-    // Ignore errors, continue to fallback
-  }
-
-  // Fallback: read from ~/.pi/agent/models.json
-  try {
-    const { homedir } = require('node:os');
-    const { readFileSync, existsSync } = require('node:fs');
-    const { join } = require('node:path');
-    const modelsJsonPath = join(homedir(), '.pi', 'agent', 'models.json');
-
-    if (existsSync(modelsJsonPath)) {
-      const content = readFileSync(modelsJsonPath, 'utf-8');
-      const modelsData = JSON.parse(content);
-
-      if (modelsData.providers?.['ollama-cloud']?.apiKey) {
-        return modelsData.providers['ollama-cloud'].apiKey;
-      }
-    }
-  } catch {
-    // Ignore errors, return empty string
-  }
-
-  return '';
+export function getProviderApiKey(
+  provider: ProviderName,
+  settings: AppSettings
+): string | undefined {
+  const fromEnv = process.env[PROVIDER_KEY_ENV[provider]];
+  if (fromEnv) return fromEnv;
+  const fromFile = settings.providers[provider].api_key;
+  return fromFile ? fromFile : undefined;
 }

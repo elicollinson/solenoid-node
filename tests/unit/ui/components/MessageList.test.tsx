@@ -3,10 +3,10 @@
  *
  * Unit tests for the MessageList component that displays chat messages.
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
-import { MessageList, type Message } from '../../../../src/ui/components/MessageList.js';
+import { type Message, MessageList } from '../../../../src/ui/components/MessageList.js';
 
 describe('MessageList', () => {
   it('shows empty state when no messages', () => {
@@ -107,20 +107,16 @@ describe('MessageList', () => {
     expect(lastFrame()).toContain('Third message');
   });
 
-  it('uses custom agent name when provided', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Research results',
-        agentName: 'research_agent',
-      },
+  it('shows reasoning only while the message is streaming', () => {
+    const streaming: Message[] = [
+      { id: '1', role: 'assistant', content: '', isStreaming: true, reasoning: 'weighing options' },
+    ];
+    const done: Message[] = [
+      { id: '1', role: 'assistant', content: 'Answer', reasoning: 'weighing options' },
     ];
 
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('research_agent');
-    expect(lastFrame()).not.toContain('Solenoid');
+    expect(render(<MessageList messages={streaming} />).lastFrame()).toContain('weighing options');
+    expect(render(<MessageList messages={done} />).lastFrame()).not.toContain('weighing options');
   });
 
   it('limits displayed messages when maxHeight is set', () => {
@@ -287,7 +283,8 @@ describe('MessageList', () => {
       {
         id: '1',
         role: 'assistant',
-        content: '* **General Knowledge:** writing and analysis\n* **Web Research:** searching the web',
+        content:
+          '* **General Knowledge:** writing and analysis\n* **Web Research:** searching the web',
         isStreaming: false,
       },
     ];

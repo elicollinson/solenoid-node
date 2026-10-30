@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, unlinkSync, readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
-  generateSettings,
-  writeSettingsFile,
-  getEnvVarStatus,
-  getDefaultSettings,
   DEFAULT_ENV_MAPPINGS,
+  generateSettings,
+  getDefaultSettings,
+  getEnvVarStatus,
+  writeSettingsFile,
 } from '../../src/config/generator.js';
 
 describe('Config Generator', () => {
@@ -19,15 +19,11 @@ describe('Config Generator', () => {
   beforeEach(() => {
     // Save and clear env vars
     originalEnv['BRAVE_SEARCH_API_KEY'] = process.env['BRAVE_SEARCH_API_KEY'];
-    originalEnv['GOOGLE_API_KEY'] = process.env['GOOGLE_API_KEY'];
-    originalEnv['GOOGLE_CX'] = process.env['GOOGLE_CX'];
-    originalEnv['OLLAMA_HOST'] = process.env['OLLAMA_HOST'];
+    originalEnv['LMSTUDIO_BASE_URL'] = process.env['LMSTUDIO_BASE_URL'];
     originalEnv['MY_CUSTOM_KEY'] = process.env['MY_CUSTOM_KEY'];
 
     delete process.env['BRAVE_SEARCH_API_KEY'];
-    delete process.env['GOOGLE_API_KEY'];
-    delete process.env['GOOGLE_CX'];
-    delete process.env['OLLAMA_HOST'];
+    delete process.env['LMSTUDIO_BASE_URL'];
     delete process.env['MY_CUSTOM_KEY'];
   });
 
@@ -50,26 +46,33 @@ describe('Config Generator', () => {
     it('should return valid default settings structure', () => {
       const settings = getDefaultSettings();
 
-      expect(settings).toHaveProperty('ollama_host');
-      expect(settings).toHaveProperty('embeddings');
-      expect(settings).toHaveProperty('models');
+      expect(settings).toHaveProperty('providers');
+      expect(settings).toHaveProperty('routes');
+      expect(settings).toHaveProperty('agent');
+      expect(settings).toHaveProperty('screening');
       expect(settings).toHaveProperty('search');
       expect(settings).toHaveProperty('mcp_servers');
-      expect(settings).toHaveProperty('agent_prompts');
     });
 
-    it('should have correct default model config', () => {
+    it('should default to Gemma 4 26B on LM Studio, then OpenRouter', () => {
       const settings = getDefaultSettings();
 
-      expect(settings.models.default.provider).toBe('ollama_chat');
-      expect(settings.models.default.context_length).toBe(262144);
+      expect(settings.routes).toEqual([
+        { provider: 'lmstudio', model: 'google/gemma-4-26b-a4b' },
+        { provider: 'openrouter', model: 'google/gemma-4-26b-a4b-it' },
+      ]);
+      expect(settings.screening).toMatchObject({
+        enabled: true,
+        provider: 'lmstudio',
+        model: 'google/gemma-4-26b-a4b',
+      });
     });
 
     it('should have correct default search config', () => {
       const settings = getDefaultSettings();
 
       expect(settings.search.provider).toBe('brave');
-      expect(settings.search.brave_search_api_key).toBe('');
+      expect(settings.search.brave_search_api_key).toBeUndefined();
     });
   });
 
@@ -78,9 +81,7 @@ describe('Config Generator', () => {
       const status = getEnvVarStatus();
 
       expect(status).toHaveProperty('BRAVE_SEARCH_API_KEY');
-      expect(status).toHaveProperty('GOOGLE_API_KEY');
-      expect(status).toHaveProperty('GOOGLE_CX');
-      expect(status).toHaveProperty('OLLAMA_HOST');
+      expect(status).toHaveProperty('LMSTUDIO_BASE_URL');
     });
 
     it('should detect when env var is set', () => {
@@ -113,8 +114,8 @@ describe('Config Generator', () => {
     it('should generate default settings when no env vars are set', () => {
       const settings = generateSettings();
 
-      expect(settings.search.brave_search_api_key).toBe('');
-      expect(settings.ollama_host).toBe('https://ollama.com');
+      expect(settings.search.brave_search_api_key).toBeUndefined();
+      expect(settings.providers.lmstudio.base_url).toBe('http://localhost:1234/v1');
     });
 
     it('should inject BRAVE_SEARCH_API_KEY from env', () => {
@@ -125,50 +126,48 @@ describe('Config Generator', () => {
       expect(settings.search.brave_search_api_key).toBe('my-brave-api-key');
     });
 
-    it('should inject OLLAMA_HOST from env', () => {
-      process.env['OLLAMA_HOST'] = 'http://custom-ollama:11434';
+    it('should inject LMSTUDIO_BASE_URL from env', () => {
+      process.env['LMSTUDIO_BASE_URL'] = 'http://192.168.0.10:1234/v1';
 
       const settings = generateSettings();
 
-      expect(settings.ollama_host).toBe('http://custom-ollama:11434');
+      expect(settings.providers.lmstudio.base_url).toBe('http://192.168.0.10:1234/v1');
     });
 
-    it('should inject multiple env vars', () => {
-      process.env['BRAVE_SEARCH_API_KEY'] = 'brave-key';
-      process.env['GOOGLE_API_KEY'] = 'google-key';
-      process.env['GOOGLE_CX'] = 'google-cx-id';
-      process.env['OLLAMA_HOST'] = 'http://remote:11434';
-
-      const settings = generateSettings();
-
-      expect(settings.search.brave_search_api_key).toBe('brave-key');
-      expect(settings.search.google_api_key).toBe('google-key');
-      expect(settings.search.google_cx).toBe('google-cx-id');
-      expect(settings.ollama_host).toBe('http://remote:11434');
+    it('should never write provider API keys into the file', () => {
+      process.env['OPENROUTER_API_KEY'] = 'sk-secret';
+      try {
+        const settings = generateSettings();
+        expect(JSON.stringify(settings)).not.toContain('sk-secret');
+      } finally {
+        delete process.env['OPENROUTER_API_KEY'];
+      }
     });
 
     it('should merge with baseSettings', () => {
       const baseSettings = {
         search: {
-          provider: 'google' as const,
+          provider: 'none' as const,
         },
       };
 
-      process.env['GOOGLE_API_KEY'] = 'google-key';
+      process.env['BRAVE_SEARCH_API_KEY'] = 'brave-key';
 
       const settings = generateSettings({ baseSettings });
 
       // Provider should be from base settings
-      expect(settings.search.provider).toBe('google');
+      expect(settings.search.provider).toBe('none');
       // API key should be from env
-      expect(settings.search.google_api_key).toBe('google-key');
+      expect(settings.search.brave_search_api_key).toBe('brave-key');
     });
 
     it('should support custom env mappings', () => {
       process.env['MY_CUSTOM_KEY'] = 'custom-value';
 
       const settings = generateSettings({
-        envMappings: [{ envVar: 'MY_CUSTOM_KEY', settingsPath: ['search', 'brave_search_api_key'] }],
+        envMappings: [
+          { envVar: 'MY_CUSTOM_KEY', settingsPath: ['search', 'brave_search_api_key'] },
+        ],
       });
 
       expect(settings.search.brave_search_api_key).toBe('custom-value');
@@ -192,7 +191,7 @@ describe('Config Generator', () => {
       // Only the env var that was set should be present
       expect(settings.search?.brave_search_api_key).toBe('only-this');
       // Other defaults should not be present (or undefined)
-      expect(settings.models).toBeUndefined();
+      expect(settings.routes).toBeUndefined();
     });
   });
 
@@ -209,8 +208,8 @@ describe('Config Generator', () => {
       const content = readFileSync(testOutputPath, 'utf-8');
       const parsed = parseYaml(content);
 
-      expect(parsed).toHaveProperty('embeddings');
-      expect(parsed).toHaveProperty('models');
+      expect(parsed).toHaveProperty('providers');
+      expect(parsed).toHaveProperty('routes');
       expect(parsed).toHaveProperty('search');
     });
 
@@ -269,9 +268,7 @@ describe('Config Generator', () => {
       const envVars = DEFAULT_ENV_MAPPINGS.map((m) => m.envVar);
 
       expect(envVars).toContain('BRAVE_SEARCH_API_KEY');
-      expect(envVars).toContain('GOOGLE_API_KEY');
-      expect(envVars).toContain('GOOGLE_CX');
-      expect(envVars).toContain('OLLAMA_HOST');
+      expect(envVars).toContain('LMSTUDIO_BASE_URL');
     });
 
     it('should have valid settings paths', () => {

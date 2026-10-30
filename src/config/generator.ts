@@ -7,16 +7,15 @@
  *
  * Supported environment variables:
  * - BRAVE_SEARCH_API_KEY: Brave Search API key
- * - GOOGLE_API_KEY: Google API key (for search)
- * - GOOGLE_CX: Google Custom Search Engine ID
- * - OLLAMA_HOST: Ollama server URL
- * - OPENAI_API_KEY: OpenAI API key (for embeddings/models)
- * - ANTHROPIC_API_KEY: Anthropic API key
+ * - LMSTUDIO_BASE_URL: LM Studio server URL (including /v1)
+ *
+ * Provider API keys (LMSTUDIO_API_KEY, OPENROUTER_API_KEY) are read from the
+ * environment at runtime and are deliberately not written into the file.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import type { AppSettings } from './schema.js';
+import { type AppSettings, AppSettingsSchema } from './schema.js';
 
 /**
  * Environment variable to settings path mapping
@@ -32,44 +31,14 @@ export interface EnvMapping {
  */
 export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
   { envVar: 'BRAVE_SEARCH_API_KEY', settingsPath: ['search', 'brave_search_api_key'] },
-  { envVar: 'GOOGLE_API_KEY', settingsPath: ['search', 'google_api_key'] },
-  { envVar: 'GOOGLE_CX', settingsPath: ['search', 'google_cx'] },
-  { envVar: 'OLLAMA_HOST', settingsPath: ['ollama_host'] },
-  { envVar: 'OLLAMA_CLOUD_API_KEY', settingsPath: ['ollama_cloud_api_key'] },
+  { envVar: 'LMSTUDIO_BASE_URL', settingsPath: ['providers', 'lmstudio', 'base_url'] },
 ];
 
 /**
  * Default settings template
  */
 export function getDefaultSettings(): AppSettings {
-  return {
-    ollama_host: 'https://ollama.com',
-    ollama_cloud_api_key: '',
-    embeddings: {
-      provider: 'ollama',
-      host: 'https://ollama.com',
-      model: 'nomic-embed-text',
-    },
-    models: {
-      default: {
-        name: 'gemma4:31b-cloud',
-        provider: 'ollama_chat',
-        context_length: 262144,
-      },
-    },
-    search: {
-      provider: 'brave',
-      brave_search_api_key: '',
-    },
-    mcp_servers: {},
-    agent_prompts: {},
-    keyboard: {
-      interrupt: 'escape',
-    },
-    display: {
-      clear_progression_on_final: true,
-    },
-  };
+  return AppSettingsSchema.parse({});
 }
 
 /**
@@ -132,8 +101,8 @@ export function generateSettings(options: GenerateSettingsOptions = {}): AppSett
 
   // Start with default settings or provided base
   const settings = onlySetEnvVars
-    ? ({ ...baseSettings } as Record<string, unknown>)
-    : { ...getDefaultSettings(), ...baseSettings };
+    ? (structuredClone(baseSettings ?? {}) as Record<string, unknown>)
+    : { ...getDefaultSettings(), ...structuredClone(baseSettings ?? {}) };
 
   // Apply environment variable mappings
   for (const mapping of envMappings) {

@@ -3,11 +3,8 @@
  *
  * Unit tests for the keyboard configuration schema and settings helper.
  */
-import { describe, it, expect } from 'bun:test';
-import {
-  AppSettingsSchema,
-  KeyboardConfigSchema,
-} from '../../src/config/schema.js';
+import { describe, expect, it } from 'bun:test';
+import { AppSettingsSchema, KeyboardConfigSchema } from '../../src/config/schema.js';
 import { getInterruptKey } from '../../src/config/settings.js';
 
 describe('KeyboardConfigSchema', () => {

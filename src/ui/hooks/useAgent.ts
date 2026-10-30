@@ -1,22 +1,12 @@
 /**
  * useAgent Hook
  *
- * Provides direct ADK integration for the Ink UI using React 18 Suspense.
- * Uses a resource pattern to suspend until MCP tools are loaded.
+ * Builds the harness once (connecting MCP servers) behind React Suspense and
+ * hands the UI a conversation session for it.
  */
-import type { InMemoryRunner } from '@google/adk';
-import { useCallback, useRef } from 'react';
-import { createAdkAgentHierarchy, runAgent } from '../../agents/index.js';
-
-export interface AgentEvent {
-  type: 'text' | 'tool_start' | 'tool_args' | 'tool_end' | 'transfer' | 'status' | 'done' | 'error';
-  content?: string;
-  toolCallId?: string;
-  toolName?: string;
-  toolArgs?: string;
-  transferTo?: string;
-  error?: string;
-}
+import { useRef } from 'react';
+import { loadSettings } from '../../config/index.js';
+import { type Harness, Session, createHarness } from '../../harness/index.js';
 
 /**
  * Resource wrapper for Suspense compatibility.
@@ -48,72 +38,28 @@ function createResource<T>(promise: Promise<T>) {
 }
 
 // Singleton resource created at module level
-let agentResource: ReturnType<typeof createResource<InMemoryRunner>> | null = null;
+let harnessResource: ReturnType<typeof createResource<Harness>> | null = null;
 
-function getAgentResource() {
-  if (!agentResource) {
-    agentResource = createResource(createAdkAgentHierarchy().then(({ runner }) => runner));
+function getHarnessResource() {
+  if (!harnessResource) {
+    harnessResource = createResource(Promise.resolve().then(() => createHarness(loadSettings())));
   }
-  return agentResource;
+  return harnessResource;
 }
 
-export function useAgent() {
-  // This will suspend if runner not ready
-  const runner = getAgentResource().read();
-  const sessionIdRef = useRef<string>(crypto.randomUUID());
+/** The harness from the most recent successful startup, for shutdown. */
+export function currentHarness(): Harness | undefined {
+  try {
+    return harnessResource?.read();
+  } catch {
+    return undefined;
+  }
+}
 
-  const run = useCallback(
-    async function* (input: string): AsyncGenerator<AgentEvent, void, unknown> {
-      try {
-        for await (const chunk of runAgent(input, runner, sessionIdRef.current)) {
-          switch (chunk.type) {
-            case 'text':
-              if (chunk.content) {
-                yield { type: 'text', content: chunk.content };
-              }
-              break;
-            case 'tool_call':
-              if (chunk.toolCall) {
-                const toolCallId = crypto.randomUUID();
-                yield {
-                  type: 'tool_start',
-                  toolCallId,
-                  toolName: chunk.toolCall.function.name,
-                };
-                if (chunk.toolCall.function.arguments) {
-                  yield {
-                    type: 'tool_args',
-                    toolCallId,
-                    toolArgs: JSON.stringify(chunk.toolCall.function.arguments),
-                  };
-                }
-                yield { type: 'tool_end', toolCallId };
-              }
-              break;
-            case 'transfer':
-              if (chunk.transferTo) {
-                yield { type: 'transfer', transferTo: chunk.transferTo };
-              }
-              break;
-            case 'status':
-              if (chunk.content) {
-                yield { type: 'status', content: chunk.content };
-              }
-              break;
-            case 'done':
-              yield { type: 'done' };
-              break;
-          }
-        }
-      } catch (error) {
-        yield {
-          type: 'error',
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    },
-    [runner]
-  );
-
-  return { run };
+export function useAgent(): { harness: Harness; session: Session } {
+  // Suspends until the harness is ready
+  const harness = getHarnessResource().read();
+  const sessionRef = useRef<Session | null>(null);
+  if (!sessionRef.current) sessionRef.current = new Session(harness.agent);
+  return { harness, session: sessionRef.current };
 }

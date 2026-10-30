@@ -1,19 +1,24 @@
 /**
  * Main App Component
  *
- * Root React component for the terminal UI. Uses React 18 Suspense for
- * agent initialization loading state. Manages chat state, screen navigation,
- * and direct ADK agent invocation.
+ * Root React component for the terminal UI. Uses React Suspense while the
+ * harness starts (MCP servers connect), then runs one conversation session:
+ * streams the agent's events into the message list, pauses for approval
+ * before write tools, and aborts the run on the interrupt key.
  *
  * Dependencies:
  * - ink: React-based terminal UI framework
- * - React Suspense: Handles loading state during agent initialization
+ * - React Suspense: Handles loading state during harness initialization
  */
-import { Box, useApp, useInput } from 'ink';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import type { ToolVerdict } from '@elicollinson/solenoid-security';
+import { Box, Text, useApp, useInput } from 'ink';
+import { Suspense, useMemo, useRef, useState } from 'react';
 import { clearArtifacts } from '../artifacts/index.js';
-import { getInterruptKey, tryLoadSettings } from '../config/index.js';
+import { getInterruptKey } from '../config/index.js';
+import { AgentAbortedError, type AgentEvent, type ApprovalRequest } from '../core/index.js';
+import { declinedMessage, describeRunError } from '../harness/index.js';
 import { uiLogger } from '../utils/logger.js';
+import { ApprovalPrompt, type PendingApproval } from './components/ApprovalPrompt.js';
 import {
   ChatInput,
   ErrorBoundary,
@@ -30,6 +35,10 @@ import {
 import { useAgent } from './hooks/index.js';
 
 type Screen = 'chat' | 'settings' | 'help';
+
+interface ApprovalState extends PendingApproval {
+  resolve: (allow: boolean) => void;
+}
 
 function formatInterruptHint(interruptKey: string): string {
   const label = interruptKey === 'escape' ? 'Esc' : interruptKey;
@@ -49,7 +58,7 @@ function matchesInterruptKey(
 export function App() {
   return (
     <ErrorBoundary fallback={(error) => <LoadingScreen error={error} />}>
-      <Suspense fallback={<LoadingScreen message="Initializing agents..." />}>
+      <Suspense fallback={<LoadingScreen message="Starting agent..." />}>
         <AppContent />
       </Suspense>
     </ErrorBoundary>
@@ -58,23 +67,18 @@ export function App() {
 
 function AppContent() {
   const { exit } = useApp();
-  const agent = useAgent(); // Will suspend until MCP tools are loaded
+  const { harness, session } = useAgent(); // Suspends until the harness is ready
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() =>
+    harness.warnings.map((content) => ({ id: crypto.randomUUID(), role: 'system', content }))
+  );
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [screen, setScreen] = useState<Screen>('chat');
-  const interruptRef = useRef(false);
+  const [approval, setApproval] = useState<ApprovalState | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const interruptKey = useMemo(() => getInterruptKey(), []);
-
-  useEffect(() => {
-    const settings = tryLoadSettings();
-    if (settings) {
-      uiLogger.info('Settings loaded successfully');
-    } else {
-      uiLogger.warn('Settings not available');
-    }
-  }, []);
+  const showReasoning = harness.settings.display.show_reasoning;
 
   // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
   // useInput cleanup unrefs stdin, and an always-active no-op handler
@@ -93,64 +97,61 @@ function AppContent() {
     { isActive: screen !== 'chat' }
   );
 
-  // Interrupt handler - active during processing on chat screen
+  // Interrupt handler - active during processing on chat screen. While an
+  // approval is open its own keys answer it, so Esc declines rather than
+  // aborting the whole run.
   useInput(
     (input, key) => {
       if (matchesInterruptKey(interruptKey, input, key)) {
-        interruptRef.current = true;
+        abortRef.current?.abort();
       }
     },
-    { isActive: isProcessing && screen === 'chat' }
+    { isActive: isProcessing && screen === 'chat' && !approval }
   );
 
-  const handleSlashCommand = (command: string): boolean => {
+  const addSystemMessage = (content: string) => {
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'system', content }]);
+  };
+
+  const handleSlashCommand = (command: string): void => {
     const cmd = command.toLowerCase().trim();
     switch (cmd) {
       case '/help':
         setScreen('help');
-        return true;
+        return;
       case '/settings':
         setScreen('settings');
-        return true;
+        return;
       case '/clear':
         setMessages([]);
-        return true;
+        session.clear();
+        clearArtifacts();
+        return;
       case '/quit':
       case '/exit':
         exit();
-        return true;
-      case '/agents': {
-        const agentList: Message = {
-          id: crypto.randomUUID(),
-          role: 'system',
-          content: `Available agents:
-  - research_agent: Web search and research tasks
-  - code_executor_agent: Execute Python code
-  - chart_generator_agent: Create Pygal charts
-  - generic_agent: General text tasks
-  - mcp_agent: External tool integrations`,
-        };
-        setMessages((prev) => [...prev, agentList]);
-        return true;
+        return;
+      case '/tools': {
+        const routes = harness.settings.routes
+          .map((r, i) => `  ${i + 1}. ${r.provider}: ${r.model}`)
+          .join('\n');
+        const screening = harness.settings.screening;
+        addSystemMessage(
+          `Routes (tried in order):\n${routes}\n\nScreening: ${
+            screening.enabled ? `${screening.provider}: ${screening.model}` : 'off'
+          }\n\nTools:\n${harness.toolNames.map((n) => `  - ${n}`).join('\n')}`
+        );
+        return;
       }
-      default: {
-        const unknownCmd: Message = {
-          id: crypto.randomUUID(),
-          role: 'system',
-          content: `Unknown command: ${command}. Type /help for available commands.`,
-        };
-        setMessages((prev) => [...prev, unknownCmd]);
-        return true;
-      }
+      default:
+        addSystemMessage(`Unknown command: ${command}. Type /help for available commands.`);
     }
   };
 
   const handleSubmit = async (text: string) => {
     uiLogger.info({ text }, 'handleSubmit called');
 
-    // Handle slash commands
     if (text.startsWith('/')) {
-      uiLogger.debug({ text }, 'Processing slash command');
       handleSlashCommand(text);
       return;
     }
@@ -158,149 +159,169 @@ function AppContent() {
     // Clear artifact store from previous turn
     clearArtifacts();
 
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: text,
-    };
-    uiLogger.debug({ messageId: userMessage.id }, 'Adding user message');
-    setMessages((prev) => [...prev, userMessage]);
+    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: text };
+    const assistantMessageId = crypto.randomUUID();
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      { id: assistantMessageId, role: 'assistant', content: '', isStreaming: true, parts: [] },
+    ]);
     setIsProcessing(true);
     setStatus('Thinking...');
 
-    const assistantMessageId = crypto.randomUUID();
-    const parts: MessagePart[] = [];
-    const toolCallMap = new Map<string, ToolCall>();
+    // Parts of the reply as drawn. `turnStart` marks where the model call in
+    // progress began, so a retried call can drop its partial output.
+    let parts: MessagePart[] = [];
+    let turnStart = 0;
+    let reasoning = '';
+    const toolCalls = new Map<string, ToolCall>();
 
-    // Helper to update only the assistant message being streamed
-    const updateAssistant = (updates: Partial<Message>): void => {
+    const textOf = (list: MessagePart[]) =>
+      list
+        .filter((p): p is Extract<MessagePart, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.content)
+        .join('');
+
+    const updateAssistant = (updates: Partial<Message> = {}): void => {
+      const snapshot = [...parts];
       setMessages((prev) =>
-        prev.map((msg) => (msg.id === assistantMessageId ? { ...msg, ...updates } : msg))
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: textOf(snapshot),
+                parts: snapshot,
+                reasoning: showReasoning ? reasoning : undefined,
+                ...updates,
+              }
+            : msg
+        )
       );
     };
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        isStreaming: true,
-        parts: [],
-      },
-    ]);
+    const onEvent = (event: AgentEvent): void => {
+      switch (event.type) {
+        case 'turn_start':
+          turnStart = parts.length;
+          reasoning = '';
+          setStatus('Thinking...');
+          break;
 
+        case 'reasoning_delta':
+          reasoning += event.text;
+          if (showReasoning) updateAssistant();
+          break;
+
+        case 'text_delta': {
+          const last = parts[parts.length - 1];
+          if (last && last.type === 'text' && parts.length > turnStart) {
+            parts[parts.length - 1] = { type: 'text', content: last.content + event.text };
+          } else {
+            parts.push({ type: 'text', content: event.text });
+          }
+          setStatus('Writing...');
+          updateAssistant();
+          break;
+        }
+
+        case 'tool_start': {
+          const args =
+            event.args && typeof event.args === 'object'
+              ? (event.args as Record<string, unknown>)
+              : { raw: event.args };
+          const toolCall: ToolCall = { id: event.id, name: event.name, status: 'running', args };
+          toolCalls.set(event.id, toolCall);
+          parts.push({ type: 'tool_call', toolCall });
+          setStatus(`Running: ${event.name}`);
+          updateAssistant();
+          break;
+        }
+
+        case 'tool_end': {
+          const toolCall = toolCalls.get(event.id);
+          if (toolCall) {
+            toolCall.status = event.ok && !event.declined ? 'completed' : 'error';
+            if (!event.ok || event.declined) {
+              toolCall.result = event.quarantined
+                ? 'output blocked: possible prompt injection'
+                : event.declined
+                  ? 'declined'
+                  : event.output.replace(/^Error:\s*/, '');
+            }
+            parts = parts.map((p) =>
+              p.type === 'tool_call' && p.toolCall.id === event.id
+                ? { ...p, toolCall: { ...toolCall } }
+                : p
+            );
+            updateAssistant();
+          }
+          break;
+        }
+
+        case 'retry':
+          parts = parts.slice(0, turnStart);
+          setStatus(`Retrying (${event.error})...`);
+          updateAssistant();
+          break;
+
+        case 'route_advanced':
+          // The task restarts from scratch on the next route.
+          parts = [];
+          turnStart = 0;
+          toolCalls.clear();
+          clearArtifacts();
+          setStatus(`${event.from.provider} failed; switching to ${event.to.provider}...`);
+          updateAssistant();
+          break;
+
+        case 'guardrail':
+          if (event.decision === 'observe') {
+            setStatus('Screen flagged your message; continuing');
+          }
+          break;
+      }
+    };
+
+    const approve = (request: ApprovalRequest): Promise<ToolVerdict> =>
+      new Promise((resolve) => {
+        const finish = (allow: boolean) => {
+          request.signal.removeEventListener('abort', onAbort);
+          setApproval(null);
+          setStatus(allow ? `Running: ${request.tool}` : 'Declined');
+          resolve(
+            allow
+              ? { allow: true }
+              : { allow: false, tell: declinedMessage(request.tool, 'declined') }
+          );
+        };
+        const onAbort = () => finish(false);
+        request.signal.addEventListener('abort', onAbort, { once: true });
+        setStatus(`Waiting for approval: ${request.tool}`);
+        setApproval({
+          tool: request.tool,
+          description: request.description,
+          args: request.args,
+          resolve: finish,
+        });
+      });
+
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      interruptRef.current = false;
-      // Direct ADK invocation via hook
-      for await (const event of agent.run(text)) {
-        if (interruptRef.current) break;
-        switch (event.type) {
-          case 'text':
-            if (event.content) {
-              // Append to last text part or create new one
-              const lastPart = parts[parts.length - 1];
-              if (lastPart && lastPart.type === 'text') {
-                lastPart.content += event.content;
-              } else {
-                parts.push({ type: 'text', content: event.content });
-              }
-              updateAssistant({
-                content: parts
-                  .filter((p) => p.type === 'text')
-                  .map((p) => p.content)
-                  .join(''),
-                parts: [...parts],
-              });
-            }
-            break;
-
-          case 'tool_start':
-            if (event.toolCallId && event.toolName) {
-              const newToolCall: ToolCall = {
-                id: event.toolCallId,
-                name: event.toolName,
-                status: 'running',
-              };
-              toolCallMap.set(event.toolCallId, newToolCall);
-              parts.push({ type: 'tool_call', toolCall: newToolCall });
-              setStatus(`Running: ${event.toolName}`);
-              updateAssistant({ parts: [...parts] });
-            }
-            break;
-
-          case 'tool_args':
-            if (event.toolCallId && event.toolArgs) {
-              const tc = toolCallMap.get(event.toolCallId);
-              if (tc) {
-                try {
-                  tc.args = JSON.parse(event.toolArgs);
-                } catch {
-                  tc.args = { raw: event.toolArgs };
-                }
-                updateAssistant({ parts: [...parts] });
-              }
-            }
-            break;
-
-          case 'tool_end':
-            if (event.toolCallId) {
-              const tc = toolCallMap.get(event.toolCallId);
-              if (tc) {
-                tc.status = 'completed';
-                updateAssistant({ parts: [...parts] });
-              }
-            }
-            break;
-
-          case 'transfer':
-            if (event.transferTo) {
-              setStatus(`Agent: ${event.transferTo}`);
-
-              // Clear intermediate progression when response_formatting_agent takes over
-              if (event.transferTo === 'response_formatting_agent') {
-                const clearProgression =
-                  tryLoadSettings()?.display.clear_progression_on_final ?? true;
-                if (clearProgression) {
-                  parts.length = 0;
-                  toolCallMap.clear();
-                }
-              }
-
-              updateAssistant({ agentName: event.transferTo, parts: [...parts] });
-            }
-            break;
-
-          case 'status':
-            if (event.content) {
-              setStatus(event.content);
-            }
-            break;
-
-          case 'error':
-            updateAssistant({
-              content: `Error: ${event.error}`,
-              isStreaming: false,
-            });
-            break;
-        }
-      }
-
-      const wasInterrupted = interruptRef.current;
-
-      // Mark any remaining running tool calls as completed
-      for (const tc of toolCallMap.values()) {
-        if (tc.status === 'running') {
-          tc.status = 'completed';
-        }
-      }
-
-      updateAssistant({ isStreaming: false, parts: [...parts], wasInterrupted });
+      await session.send(text, { signal: controller.signal, onEvent, approve });
+      for (const tc of toolCalls.values()) if (tc.status === 'running') tc.status = 'completed';
+      updateAssistant({ isStreaming: false });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      updateAssistant({ content: `Error: ${errorMessage}`, isStreaming: false });
+      if (error instanceof AgentAbortedError) {
+        updateAssistant({ isStreaming: false, wasInterrupted: true });
+      } else {
+        uiLogger.error({ error: String(error) }, 'Run failed');
+        updateAssistant({ isStreaming: false });
+        addSystemMessage(describeRunError(error));
+      }
     } finally {
-      interruptRef.current = false;
+      abortRef.current = null;
+      setApproval(null);
       setIsProcessing(false);
       setStatus('Ready');
     }
@@ -313,24 +334,38 @@ function AppContent() {
     return <HelpScreen onClose={() => setScreen('chat')} />;
   }
 
+  const primary = harness.settings.routes[0];
+
   return (
     <Box flexDirection="column" height="100%">
       <Header />
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
         <MessageList messages={messages} />
       </Box>
-      <ChatInput
-        onSubmit={handleSubmit}
-        isDisabled={isProcessing}
-        placeholder={
-          isProcessing ? 'Waiting for response...' : 'Ask the agent... (type /help for commands)'
-        }
-      />
+      {approval ? (
+        <ApprovalPrompt approval={approval} onAnswer={(allow) => approval.resolve(allow)} />
+      ) : (
+        <ChatInput
+          onSubmit={handleSubmit}
+          isDisabled={isProcessing}
+          placeholder={
+            isProcessing ? 'Waiting for response...' : 'Ask the agent... (type /help for commands)'
+          }
+        />
+      )}
       <StatusBar
         isLoading={isProcessing}
         status={status}
         interruptHint={formatInterruptHint(interruptKey)}
       />
+      {primary && (
+        <Box paddingX={1}>
+          <Text dimColor>
+            {primary.provider}: {primary.model}
+            {harness.settings.screening.enabled ? ' · screening on' : ' · screening off'}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

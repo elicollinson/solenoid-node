@@ -1,8 +1,0 @@
-node_modules/
-dist/
-logs/
-*.log
-.DS_Store
-coverage/
-.env
-.env.local

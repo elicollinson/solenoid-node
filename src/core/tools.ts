@@ -8,7 +8,7 @@
  * Ported from Solenoid-Assistant src/core/tools.ts.
  */
 import { authoredText } from '@elicollinson/solenoid-security';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 export interface FunctionToolDefinition {
   type: 'function';

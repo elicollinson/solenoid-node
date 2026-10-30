@@ -1,163 +1,80 @@
-import { describe, it, expect } from 'bun:test';
-import { AppSettingsSchema, ModelConfigSchema, EmbeddingsConfigSchema } from '../../src/config/schema.js';
+import { describe, expect, it } from 'bun:test';
+import {
+  AppSettingsSchema,
+  RoutesConfigSchema,
+  ScreeningConfigSchema,
+} from '../../src/config/schema.js';
 
-describe('Config Schema', () => {
-  describe('ModelConfigSchema', () => {
-    it('should validate a complete model config', () => {
-      const config = {
-        provider: 'ollama_chat',
-        name: 'llama3.1:8b',
-        context_length: 128000,
-      };
+describe('AppSettingsSchema', () => {
+  it('fills every section from defaults when the file is empty', () => {
+    const result = AppSettingsSchema.parse({});
 
-      const result = ModelConfigSchema.safeParse(config);
-      expect(result.success).toBe(true);
-    });
-
-    it('should apply defaults for missing optional fields', () => {
-      const config = {
-        provider: 'ollama_chat',
-        name: 'llama3.1:8b',
-      };
-
-      const result = ModelConfigSchema.safeParse(config);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.context_length).toBe(128000);
-      }
-    });
-
-    it('should reject invalid provider', () => {
-      const config = {
-        provider: 'invalid_provider',
-        name: 'llama3.1:8b',
-      };
-
-      const result = ModelConfigSchema.safeParse(config);
-      expect(result.success).toBe(false);
-    });
+    expect(result.providers.lmstudio.base_url).toBe('http://localhost:1234/v1');
+    expect(result.providers.openrouter.base_url).toBe('https://openrouter.ai/api/v1');
+    expect(result.routes.map((r) => r.provider)).toEqual(['lmstudio', 'openrouter']);
+    expect(result.agent).toEqual({ think: true, timeout_ms: 300_000 });
+    expect(result.screening.enabled).toBe(true);
+    expect(result.keyboard.interrupt).toBe('escape');
+    expect(result.display.show_reasoning).toBe(false);
   });
 
-  describe('EmbeddingsConfigSchema', () => {
-    it('should validate embeddings config', () => {
-      const config = {
-        provider: 'ollama',
-        model: 'nomic-embed-text',
-        host: 'http://localhost:11434',
-      };
-
-      const result = EmbeddingsConfigSchema.safeParse(config);
-      expect(result.success).toBe(true);
+  it('still loads a settings file from the ADK era, ignoring its old sections', () => {
+    const result = AppSettingsSchema.safeParse({
+      ollama_host: 'https://ollama.com',
+      models: { default: { name: 'gemma4:31b-cloud', provider: 'ollama_chat' } },
+      agent_prompts: { planning_agent: 'You are a planner.' },
+      embeddings: { provider: 'ollama' },
+      search: { provider: 'brave', brave_search_api_key: 'key' },
+      keyboard: { interrupt: 'tab' },
+      display: { clear_progression_on_final: true },
     });
 
-    it('should apply default host', () => {
-      const config = {
-        provider: 'ollama',
-        model: 'nomic-embed-text',
-      };
-
-      const result = EmbeddingsConfigSchema.safeParse(config);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.host).toBe('http://localhost:11434');
-      }
-    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('models');
+      expect(result.data.search.brave_search_api_key).toBe('key');
+      expect(result.data.keyboard.interrupt).toBe('tab');
+      expect(result.data.routes).toHaveLength(2);
+    }
   });
 
-  describe('ollama_host', () => {
-    it('should accept a valid URL', () => {
-      const settings = {
-        ollama_host: 'http://remote:11434',
-        models: {
-          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
-        },
-      };
-
-      const result = AppSettingsSchema.safeParse(settings);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.ollama_host).toBe('http://remote:11434');
-      }
+  it('keeps a partly specified provider and defaults the other', () => {
+    const result = AppSettingsSchema.parse({
+      providers: { lmstudio: { base_url: 'http://192.168.0.2:1234/v1' } },
     });
 
-    it('should be optional (missing is valid)', () => {
-      const settings = {
-        models: {
-          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
-        },
-      };
-
-      const result = AppSettingsSchema.safeParse(settings);
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.ollama_host).toBeUndefined();
-      }
-    });
-
-    it('should reject an invalid URL', () => {
-      const settings = {
-        ollama_host: 'not-a-url',
-        models: {
-          default: { provider: 'ollama_chat', name: 'llama3.1:8b' },
-        },
-      };
-
-      const result = AppSettingsSchema.safeParse(settings);
-      expect(result.success).toBe(false);
-    });
+    expect(result.providers.lmstudio.base_url).toBe('http://192.168.0.2:1234/v1');
+    expect(result.providers.openrouter.base_url).toBe('https://openrouter.ai/api/v1');
   });
 
-  describe('AppSettingsSchema', () => {
-    it('should validate complete app settings', () => {
-      const settings = {
-        models: {
-          default: {
-            provider: 'ollama_chat',
-            name: 'llama3.1:8b',
-            context_length: 128000,
-          },
-          agents: {},
-        },
-        embeddings: {
-          provider: 'ollama',
-          model: 'nomic-embed-text',
-        },
-        prompts: {},
-        mcp_servers: {},
-      };
-
-      const result = AppSettingsSchema.safeParse(settings);
-      expect(result.success).toBe(true);
+  it('rejects a provider base_url that is not a URL', () => {
+    const result = AppSettingsSchema.safeParse({
+      providers: { lmstudio: { base_url: 'not-a-url' } },
     });
 
-    it('should validate settings with MCP servers', () => {
-      const settings = {
-        models: {
-          default: {
-            provider: 'ollama_chat',
-            name: 'llama3.1:8b',
-          },
-        },
-        embeddings: {
-          provider: 'ollama',
-          model: 'nomic-embed-text',
-        },
-        mcp_servers: {
-          filesystem: {
-            type: 'stdio',
-            command: 'npx',
-            args: ['@modelcontextprotocol/server-filesystem'],
-          },
-          context7: {
-            type: 'http',
-            url: 'https://mcp.context7.com/api/v1',
-            headers: { Authorization: 'Bearer token' },
-          },
-        },
-      };
+    expect(result.success).toBe(false);
+  });
 
-      const result = AppSettingsSchema.safeParse(settings);
-      expect(result.success).toBe(true);
-    });
+  it('accepts effort levels and booleans for agent.think', () => {
+    expect(AppSettingsSchema.parse({ agent: { think: 'low' } }).agent.think).toBe('low');
+    expect(AppSettingsSchema.parse({ agent: { think: false } }).agent.think).toBe(false);
+    expect(AppSettingsSchema.safeParse({ agent: { think: 'max' } }).success).toBe(false);
+  });
+});
+
+describe('RoutesConfigSchema', () => {
+  it('rejects an empty route list', () => {
+    expect(RoutesConfigSchema.safeParse([]).success).toBe(false);
+  });
+
+  it('rejects an unknown provider', () => {
+    expect(RoutesConfigSchema.safeParse([{ provider: 'ollama', model: 'x' }]).success).toBe(false);
+  });
+});
+
+describe('ScreeningConfigSchema', () => {
+  it('bounds the threshold to 0..1', () => {
+    expect(ScreeningConfigSchema.safeParse({ threshold: 1.5 }).success).toBe(false);
+    expect(ScreeningConfigSchema.parse({ threshold: 0.15 }).threshold).toBe(0.15);
   });
 });

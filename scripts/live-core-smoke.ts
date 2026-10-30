@@ -14,7 +14,7 @@ import {
   createSecurity,
 } from '@elicollinson/solenoid-security';
 import OpenAI from 'openai';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import {
   Agent,
   type ChatMessage,

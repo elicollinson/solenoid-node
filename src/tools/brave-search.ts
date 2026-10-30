@@ -6,7 +6,6 @@
  * (BRAVE_SEARCH_API_KEY) or in app_settings.yaml.
  */
 import { loadSettings } from '../config/index.js';
-import type { ToolDefinition } from '../llm/types.js';
 import { fetchWithTimeout } from '../utils/fetch.js';
 
 const SEARCH_TIMEOUT_MS = 15_000;
@@ -76,21 +75,3 @@ function getApiKey(): string | undefined {
     return undefined;
   }
 }
-
-export const braveSearchToolDef: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'universal_search',
-    description: 'Performs a web search using Brave Search. Returns titles, links, and snippets.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'The search query string',
-        },
-      },
-      required: ['query'],
-    },
-  },
-};

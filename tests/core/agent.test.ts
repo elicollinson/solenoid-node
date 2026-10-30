@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { ScreeningResult, TextInput } from '@elicollinson/solenoid-security';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import {
   Agent,
   AgentAbortedError,
@@ -14,6 +14,7 @@ import {
   PromptInjectionDetectedError,
   PromptInjectionScreeningError,
   defineTool,
+  modelOutputForScreen,
 } from '../../src/core/index.js';
 
 type Step = ChatMessage | Error | ((messages: ChatMessage[], opts: ChatOptions) => ChatMessage);
@@ -376,5 +377,22 @@ describe('Structured output', () => {
     expect(output).toEqual({ answer: 42 });
     const rejection = provider.calls[1]!.find((m) => m.role === 'tool');
     expect(rejection?.content).toStartWith('Result rejected:');
+  });
+});
+
+describe('modelOutputForScreen', () => {
+  test('labels every part of the turn so the judge reads each for what it is', () => {
+    const text = modelOutputForScreen({
+      role: 'assistant',
+      content: 'Checking now.',
+      thinking: 'I should read the page.',
+      toolCalls: [{ id: '1', name: 'read_webpage', arguments: { url: 'https://example.com' } }],
+    });
+
+    expect(text).toBe(
+      'Assistant reasoning:\nI should read the page.\n\n' +
+        'Assistant reply:\nChecking now.\n\n' +
+        'Tool call read_webpage with arguments: {"url":"https://example.com"}'
+    );
   });
 });

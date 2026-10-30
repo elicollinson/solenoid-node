@@ -1,10 +1,9 @@
 /**
  * Artifact Store
  *
- * Module-level singleton that holds rich outputs (charts, tables, text)
- * produced by specialist agents during a turn. The response formatting
- * agent reads from this store to embed original content in the final
- * output instead of letting the planning agent reconstruct it as ASCII.
+ * Module-level singleton that holds rich outputs (charts, tables, text) the
+ * agent produces during a turn, so the UI can render the original content
+ * inline instead of the model reconstructing it as ASCII.
  *
  * Same singleton pattern as cachedSettings in settings.ts.
  */
@@ -15,7 +14,6 @@ export interface Artifact {
   title?: string;
   /** Raw data: chart tool args, {headers, rows} for table, {content} for text */
   data: unknown;
-  agentName: string;
   timestamp: number;
 }
 

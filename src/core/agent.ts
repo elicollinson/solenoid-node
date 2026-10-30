@@ -27,9 +27,10 @@ import {
   type TextInput,
   type TextOrigin,
   type ToolVerdict,
+  authoredText,
   currentToolGate,
 } from '@elicollinson/solenoid-security';
-import type { z } from 'zod/v4';
+import type { z } from 'zod';
 import type { ChatMessage, ChatProvider, ThinkLevel, TokenUsage } from './providers.js';
 import type { ReviewResult, Reviewer } from './reviewer.js';
 import {
@@ -48,6 +49,14 @@ import {
 
 export const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
+/**
+ * What the model is told in place of a quarantined tool output. A literal of
+ * this repository, registered so that a model quoting it back is not itself
+ * judged an injection.
+ */
+const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; output blocked.';
+authoredText.offer('agent:quarantine', QUARANTINE_NOTICE);
+
 /** Consecutive transient failures of one model call before the attempt fails. */
 const MAX_TRANSIENT_RETRIES = 4;
 
@@ -539,16 +548,7 @@ export class Agent {
       }
       if (msg.usage) emit({ type: 'usage', usage: msg.usage });
 
-      await this.screen(
-        [
-          msg.content,
-          ...(msg.thinking ? [msg.thinking] : []),
-          ...(msg.toolCalls ?? []).map((call) => safeJson(call.arguments)),
-        ],
-        'model_output',
-        'external',
-        emit
-      );
+      await this.screen([modelOutputForScreen(msg)], 'model_output', 'external', emit);
       msg.screened = true;
       messages.push(msg); // keep the native payload for continuation
       emit({ type: 'assistant_turn', message: msg });
@@ -763,7 +763,7 @@ export class Agent {
             this.log.warn({ tool: name }, '[tool] output quarantined: prompt injection detected');
             return {
               ok: false,
-              output: 'Error: Prompt injection detected in tool output; output blocked.',
+              output: QUARANTINE_NOTICE,
               quarantined: true,
             };
           }
@@ -900,6 +900,24 @@ function validateStructured(
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: message.length > 2_000 ? `${message.slice(0, 2_000)}…` : message };
   }
+}
+
+/**
+ * One assistant turn as the injection screen should read it: each part
+ * labelled for what it is. Not cosmetic. The Assistant joined the raw parts
+ * with newlines, and against the Gemma judge an ordinary turn — reasoning
+ * that ends "I should try read_webpage on that URL", followed by the call's
+ * bare JSON — scored 0.9 and aborted the run, while each part alone scored 0
+ * and the labelled form scores about 0. Every part is still screened.
+ */
+export function modelOutputForScreen(msg: ChatMessage): string {
+  const sections: string[] = [];
+  if (msg.thinking?.trim()) sections.push(`Assistant reasoning:\n${msg.thinking}`);
+  if (msg.content.trim()) sections.push(`Assistant reply:\n${msg.content}`);
+  for (const call of msg.toolCalls ?? []) {
+    sections.push(`Tool call ${call.name} with arguments: ${safeJson(call.arguments)}`);
+  }
+  return sections.join('\n\n');
 }
 
 function failed(message: string): ToolOutcome {

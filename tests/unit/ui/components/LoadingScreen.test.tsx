@@ -3,7 +3,7 @@
  *
  * Unit tests for the LoadingScreen component displayed during initialization.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { LoadingScreen } from '../../../../src/ui/components/LoadingScreen.js';

@@ -3,7 +3,7 @@
  *
  * Configures the test environment with custom matchers and global mocks.
  */
-import { beforeAll, afterAll, spyOn } from 'bun:test';
+import { afterAll, beforeAll, spyOn } from 'bun:test';
 
 // Mock crypto.randomUUID for deterministic IDs in tests
 let uuidCounter = 0;

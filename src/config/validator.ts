@@ -1,10 +1,13 @@
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import {
-  EmbeddingsConfigSchema,
+  AgentConfigSchema,
+  DisplayConfigSchema,
   KeyboardConfigSchema,
   McpServerSchema,
-  ModelsConfigSchema,
+  ProvidersConfigSchema,
+  RoutesConfigSchema,
+  ScreeningConfigSchema,
   SearchConfigSchema,
 } from './schema.js';
 
@@ -43,7 +46,7 @@ function validateYamlSyntax(yamlString: string): ValidationResult {
 /**
  * Create a validator from a Zod schema
  */
-function createZodValidator(schema: z.ZodSchema): SectionValidator {
+function createZodValidator(schema: z.ZodType): SectionValidator {
   return (yamlString: string): ValidationResult => {
     // First validate YAML syntax
     const syntaxResult = validateYamlSyntax(yamlString);
@@ -57,7 +60,7 @@ function createZodValidator(schema: z.ZodSchema): SectionValidator {
       return { isValid: true, errors: [], parsedValue: result.data };
     }
 
-    const errors: ValidationError[] = result.error.errors.map((e) => ({
+    const errors: ValidationError[] = result.error.issues.map((e) => ({
       path: e.path.join('.'),
       message: e.message,
     }));
@@ -67,28 +70,14 @@ function createZodValidator(schema: z.ZodSchema): SectionValidator {
 }
 
 // Register known section validators
-sectionValidators.set('models', createZodValidator(ModelsConfigSchema));
+sectionValidators.set('providers', createZodValidator(ProvidersConfigSchema));
+sectionValidators.set('routes', createZodValidator(RoutesConfigSchema));
+sectionValidators.set('agent', createZodValidator(AgentConfigSchema));
+sectionValidators.set('screening', createZodValidator(ScreeningConfigSchema));
 sectionValidators.set('search', createZodValidator(SearchConfigSchema));
-sectionValidators.set('embeddings', createZodValidator(EmbeddingsConfigSchema));
-
-// MCP servers validator - record of server configs
 sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), McpServerSchema)));
-
-// Ollama host validator - URL string
-sectionValidators.set('ollama_host', createZodValidator(z.string().url()));
-
-// Ollama Cloud API key validator - string (can be empty)
-sectionValidators.set('ollama_cloud_api_key', createZodValidator(z.string()));
-
 sectionValidators.set('keyboard', createZodValidator(KeyboardConfigSchema));
-
-// Agent prompts validator - record of strings with min length
-sectionValidators.set(
-  'agent_prompts',
-  createZodValidator(
-    z.record(z.string(), z.string().min(10, 'Prompt must be at least 10 characters'))
-  )
-);
+sectionValidators.set('display', createZodValidator(DisplayConfigSchema));
 
 /**
  * Main entry point - uses specific validator if registered, else just YAML parse

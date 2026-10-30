@@ -6,9 +6,8 @@
  * Messages display differently based on role (user, assistant, system) with
  * distinct colors and labels.
  *
- * AG-UI Protocol Compliance:
- * - Renders charts inline based on tool call arguments
- * - Charts appear in the message flow where the tool was called
+ * Charts render inline from render_chart tool call arguments, at the point
+ * in the message flow where the tool was called.
  *
  * Dependencies:
  * - marked: Markdown parser for formatting completed responses
@@ -60,7 +59,7 @@ export interface ToolCall {
   name: string;
   status: 'pending' | 'running' | 'completed' | 'error';
   result?: string;
-  /** Tool arguments for AG-UI protocol frontend rendering (e.g., chart data) */
+  /** Tool arguments, used to render charts and embedded artifacts inline */
   args?: Record<string, unknown>;
 }
 
@@ -74,7 +73,8 @@ export interface Message {
   content: string; // Keep for backward compat / simple messages
   isStreaming?: boolean;
   parts?: MessagePart[]; // Interleaved content
-  agentName?: string;
+  /** The model's reasoning for the turn in progress, when display.show_reasoning is on. */
+  reasoning?: string;
   wasInterrupted?: boolean;
 }
 
@@ -212,7 +212,7 @@ function MessageBubble({ message }: { message: Message }) {
     system: 'System',
   } as const;
 
-  const label = message.agentName || roleLabels[message.role];
+  const label = roleLabels[message.role];
 
   // Render text content - raw while streaming, markdown when complete
   const renderTextContent = (content: string, isStreaming: boolean, showCursor: boolean) => {
@@ -261,6 +261,13 @@ function MessageBubble({ message }: { message: Message }) {
       <Text bold color={roleColors[message.role]}>
         {label}
       </Text>
+      {message.isStreaming && message.reasoning && (
+        <Box paddingLeft={2}>
+          <Text dimColor italic wrap="wrap">
+            {message.reasoning.slice(-600)}
+          </Text>
+        </Box>
+      )}
       {renderParts()}
       {!message.isStreaming && message.wasInterrupted && (
         <Box paddingLeft={2}>
