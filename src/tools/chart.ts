@@ -3,8 +3,8 @@
  *
  * render_chart draws a terminal chart inline in the chat. The UI renders the
  * chart from the call's arguments (see ui/components/ChartRenderer.tsx); the
- * tool validates them, stores the chart as an artifact so it can be embedded
- * again, and tells the model what was drawn.
+ * tool validates them, records the chart in the turn's artifact store, and
+ * tells the model what was drawn.
  *
  * Data arrays are JSON strings rather than nested arrays, the shape every
  * backend's tool calling handled reliably. A read for the same reason as the
@@ -68,12 +68,14 @@ Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
     if (!result.success || !result.config) {
       throw new Error(result.error ?? 'Invalid chart arguments');
     }
-    const artifactId = saveArtifact({ type: 'chart', title: result.config.title, data: args });
+    saveArtifact({ type: 'chart', title: result.config.title, data: args });
+    // No artifact id in the result: given one, the model embeds the chart a
+    // second time with embed_artifact and the reply shows it twice.
     return {
       status: 'success',
       chartType: result.config.chartType,
       title: result.config.title,
-      artifactId,
+      note: 'The chart is already displayed inline at this point in your reply. Do not embed or redraw it.',
     };
   },
 });
