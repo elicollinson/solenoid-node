@@ -6,12 +6,9 @@ This file provides guidance for AI agents working on the Solenoid codebase.
 
 Before pushing any code changes, you **must** complete the following verification steps in order:
 
-### 1. Run the Code Simplifier Plugin
+### 1. Run `/simplify`
 
-After making any code changes, always start by running the code simplifier plugin to ensure the code is clean and follows best practices.
-
-The code-simplifier is an Anthropic-published agent plugin for Claude Code. Run it via: the code-simplifier:codesimplifier agent
-
+After making any code changes, start by running the `/simplify` skill on the branch. It reviews the diff for reuse, simplification, efficiency and altitude issues, then applies the fixes.
 
 ### 2. Run Unit Tests
 
@@ -33,7 +30,7 @@ bun test tests/e2e/harness-integration.test.tsx
 
 Before pushing code, confirm all of the following:
 
-- [ ] Code simplifier plugin has been run
+- [ ] `/simplify` has been run
 - [ ] All unit tests pass
 - [ ] Functional tests via agent harness pass
 
