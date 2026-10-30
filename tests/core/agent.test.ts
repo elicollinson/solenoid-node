@@ -8,6 +8,7 @@ import {
   Agent,
   AgentAbortedError,
   type AgentEvent,
+  type AgentToolKind,
   type ChatMessage,
   type ChatOptions,
   type ChatProvider,
@@ -354,7 +355,7 @@ describe('Injection screening', () => {
   });
 
   test('internal tools are neither screened nor put to approval; reads are screened', async () => {
-    const tool = (name: string, kind: 'internal' | 'read') =>
+    const tool = (name: string, kind: AgentToolKind) =>
       defineTool({
         name,
         description: `Return ${name}.`,

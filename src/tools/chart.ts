@@ -6,9 +6,6 @@
  * tool only validates them and tells the model what was drawn. Nothing is
  * stored, so there is nothing for the model to embed a second time.
  *
- * An internal tool: it touches nothing outside this process and returns only
- * the model's own arguments, so it is neither screened nor approved.
- *
  * Data arrays are JSON strings rather than nested arrays, the shape every
  * backend's tool calling handled reliably.
  */

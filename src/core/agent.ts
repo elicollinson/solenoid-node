@@ -40,6 +40,7 @@ import {
   type AgentTool,
   type AgentToolKind,
   type FunctionToolDefinition,
+  reachesWorld,
   toJsonSchema,
 } from './tools.js';
 import {
@@ -84,8 +85,8 @@ export class AgentRunError extends Error {
 
 /**
  * Where untrusted text enters the loop: the messages a run starts from, and
- * the result of every tool that reaches the world (any kind but `internal`;
- * see AgentToolKind in ./tools.ts). The model's own turns are not screened. They are not
+ * the result of every tool that reaches the world (see `reachesWorld` in
+ * ./tools.ts). The model's own turns are not screened. They are not
  * untrusted text, and against the Gemma judge an ordinary planning turn
  * ("I should read that URL") was flagged often enough to stop a quarter of
  * everyday runs. Injected text is caught where it arrives, before the model
@@ -216,7 +217,7 @@ export interface AgentOptions {
    * detector because the core reads no configuration.
    */
   screen?: Screener;
-  /** Which tools stop and ask. Defaults to every write. */
+  /** Which tools that reach the world stop and ask. Defaults to every write. Internal tools never ask. */
   requiresApproval?: (tool: AgentTool) => boolean;
   logger?: AgentLogger;
 }
@@ -545,9 +546,10 @@ export class Agent {
       }
 
       if (msg.toolCalls?.length) {
-        // One output per call, in call order. Reads and internal tools run
-        // concurrently, screens included; a write waits for the calls before it and holds back the
-        // ones after, because it may stop for approval and commits the attempt.
+        // One output per call, in call order. Everything but a write runs
+        // concurrently, screens included. A write waits for the calls before
+        // it and holds back the ones after, because it may stop for approval
+        // and commits the attempt.
         const outputs: Array<Promise<string>> = [];
         let reads: Array<Promise<string>> = [];
         let reviewerFeedback: string | undefined;
@@ -576,7 +578,8 @@ export class Agent {
           }
 
           const kind = this.tools.get(call.name)?.kind;
-          if (kind === 'read' || kind === 'internal') {
+          // Unknown tools fail fast; they go the sequential way like a write.
+          if (kind && kind !== 'write') {
             const output = this.runToolCall(call, attempt);
             reads.push(output);
             outputs.push(output);
@@ -716,13 +719,13 @@ export class Agent {
         // returned to the model so it can self-correct, not thrown.
         try {
           const args = tool.schema.parse(rawArgs); // validate at the boundary
-          span.setAttribute(SemanticConventions.INPUT_VALUE, safeJson(args));
+          if (span.isRecording())
+            span.setAttribute(SemanticConventions.INPUT_VALUE, safeJson(args));
 
           // After the parse, so a call that cannot be made is refused on its
           // own terms rather than put to somebody; before the execute, which
           // is the only ordering that means anything.
-          // Internal tools change nothing outside this process: nothing to ask.
-          if (tool.kind !== 'internal' && this.requiresApproval(tool)) {
+          if (reachesWorld(tool.kind) && this.requiresApproval(tool)) {
             const gate = attempt.approve ?? currentToolGate();
             const verdict = await gate?.({
               tool: name,
@@ -748,11 +751,10 @@ export class Agent {
             attempt.signal
           );
           const output = typeof result === 'string' ? result : JSON.stringify(result);
-          // Every result from the world is screened; an internal tool's is the
-          // model's own text (see AgentToolKind). The screen subtracts what
-          // this repository wrote and judges the rest.
+          // An internal tool's output is the model's own text. The screen
+          // subtracts what this repository wrote and judges the rest.
           const quarantined =
-            tool.kind !== 'internal' &&
+            reachesWorld(tool.kind) &&
             (await this.screen([output], 'tool_output', 'external', attempt.emit));
           if (quarantined) {
             span.setAttributes({ 'tool.quarantined': true });

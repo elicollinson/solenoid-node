@@ -34,12 +34,20 @@ export interface FunctionToolDefinition {
  *   arguments, a table it wrote), so like the model's own turns its output
  *   is not screened, and with nothing outside to change it never asks.
  *
- * External is the default in the sense that matters: `internal` must be
- * claimed, and only when no byte of the output comes from anywhere else and
- * nothing outside this process is touched. MCP tools are never internal.
- * Reads and internal tools of one turn run concurrently.
+ * `internal` must be claimed, and only when no byte of the output comes from
+ * anywhere else. MCP tools are never internal. Anything but a write runs
+ * concurrently with the other calls of its turn.
  */
 export type AgentToolKind = ToolKind | 'internal';
+
+/**
+ * Whether a tool reaches outside this process: its output is screened and it
+ * may be put to approval. Everything but `internal`, so a kind added later is
+ * screened until it says otherwise.
+ */
+export function reachesWorld(kind: AgentToolKind): kind is ToolKind {
+  return kind !== 'internal';
+}
 
 export interface ToolContext {
   signal?: AbortSignal;

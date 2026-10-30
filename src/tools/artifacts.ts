@@ -8,9 +8,7 @@
  *
  * Internal tools: they touch only this turn's in-memory display store, which
  * is cleared before the next turn, and return only what the model passed in
- * (titles, cells, ids) plus this file's literals. So they are neither
- * screened nor put to approval, and they never keep a failed attempt from
- * moving to the next route.
+ * (titles, cells, ids) plus this file's literals.
  */
 import { z } from 'zod';
 import { getArtifact, listArtifacts, saveArtifact } from '../artifacts/index.js';
