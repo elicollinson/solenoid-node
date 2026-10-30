@@ -17,7 +17,7 @@
 import { Box, Text } from 'ink';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { getArtifact } from '../../artifacts/index.js';
 import { ChartRenderer, isChartToolCall } from './ChartRenderer.js';
 
@@ -117,14 +117,6 @@ function EmbedArtifactDisplay({ toolCall }: { toolCall: ToolCall }) {
     );
   }
 
-  if (artifact.type === 'chart') {
-    return (
-      <Box flexDirection="column" paddingLeft={2}>
-        <ChartRenderer toolArgs={artifact.data as Record<string, unknown>} />
-      </Box>
-    );
-  }
-
   // Table and text artifacts share the same title + content layout
   let markdownContent: string;
   if (artifact.type === 'table') {
@@ -199,7 +191,9 @@ function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+// Memoized: a streaming delta replaces only the message in progress, so
+// finished messages (and their charts) are not re-rendered per token.
+const MessageBubble = memo(function MessageBubble({ message }: { message: Message }) {
   const roleColors = {
     user: 'green',
     assistant: 'cyan',
@@ -278,7 +272,7 @@ function MessageBubble({ message }: { message: Message }) {
       )}
     </Box>
   );
-}
+});
 
 export function MessageList({ messages, maxHeight }: MessageListProps) {
   if (messages.length === 0) {

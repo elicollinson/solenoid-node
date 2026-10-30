@@ -7,7 +7,7 @@
  *
  * Ported from Solenoid-Assistant src/core/tools.ts.
  */
-import { authoredText } from '@elicollinson/solenoid-security';
+import { type ToolKind, authoredText } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
 
 export interface FunctionToolDefinition {
@@ -20,14 +20,14 @@ export interface FunctionToolDefinition {
 }
 
 /**
- * Whether a tool observes or changes the world.
+ * Whether a tool observes or changes the world (solenoid-security's type).
  *
  * "read" means it cannot change anything a later read would see. Classify by
  * effect, not by how the name reads; when it is genuinely arguable, it is a
  * write. The agent asks before a write runs (see `ApprovalHandler` in
- * ./agent.ts) and never before a read.
+ * ./agent.ts) and never before a read, and runs a turn's reads concurrently.
  */
-export type ToolKind = 'read' | 'write';
+export type { ToolKind };
 
 export interface ToolContext {
   signal?: AbortSignal;
@@ -52,7 +52,7 @@ export function defineTool<S extends z.ZodType>(config: {
   // which is the licence for registering it as authored text: the injection
   // screen subtracts it before looking, so our own imperative tool prose is
   // never mistaken for an attack. MCP tools are built by hand in
-  // ../tools/mcp.ts precisely because a remote server's description is that
+  // ../mcp/manager.ts precisely because a remote server's description is that
   // server's text, not ours. Never route interpolated text through here.
   authoredText.offer(`tool:${config.name}`, config.description);
   return {

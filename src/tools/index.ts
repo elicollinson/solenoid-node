@@ -7,7 +7,7 @@
 import type { AgentTool } from '../core/index.js';
 import { embedArtifactTool, listArtifactsTool, saveArtifactTool } from './artifacts.js';
 import { renderChartTool } from './chart.js';
-import { readWebpageTool, webSearchTool } from './web.js';
+import { createWebSearchTool, readWebpageTool } from './web.js';
 
 export * from './artifacts.js';
 export * from './brave-search.js';
@@ -17,12 +17,12 @@ export * from './web.js';
 
 export interface BuiltinToolOptions {
   /** Web search needs a Brave API key; without one the tool is left out. */
-  search: boolean;
+  searchApiKey?: string;
 }
 
 export function builtinTools(options: BuiltinToolOptions): AgentTool[] {
   return [
-    ...(options.search ? [webSearchTool] : []),
+    ...(options.searchApiKey ? [createWebSearchTool(options.searchApiKey)] : []),
     readWebpageTool,
     renderChartTool,
     saveArtifactTool,

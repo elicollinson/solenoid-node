@@ -1,8 +1,8 @@
 /**
  * Non-Interactive CLI Runner
  *
- * Executes a single prompt and streams the answer to stdout as it is
- * written. Status and errors go to stderr, so stdout stays pipeable. Nobody
+ * Executes a single prompt and writes the answer, the final turn's text, to
+ * stdout once that turn completes. Status and errors go to stderr, so stdout stays pipeable. Nobody
  * is present to approve a write tool, so writes are declined unless
  * `--yes` was given.
  */
@@ -38,9 +38,9 @@ export async function runNonInteractive(
     process.once('SIGINT', () => controller.abort());
 
     // Only the final turn's text is the answer. Text written before a tool
-    // call ("Let me search for that") is narration, so it is held per turn
-    // and only the turn that ends the run reaches stdout.
-    let pending = '';
+    // call ("Let me search for that") is narration, so only a turn without
+    // tool calls reaches stdout. A retried or abandoned turn never completes,
+    // so it never reports a turn to print.
     let printed = false;
     await new Session(harness.agent).send(prompt, {
       signal: controller.signal,
@@ -50,25 +50,16 @@ export async function runNonInteractive(
           : { allow: false, tell: declinedMessage(request.tool, 'unattended') },
       onEvent: (event) => {
         switch (event.type) {
-          case 'turn_start':
-          case 'retry':
           case 'route_advanced':
-            pending = '';
-            if (event.type === 'route_advanced') {
-              process.stderr.write(
-                `${event.from.provider} failed; retrying on ${event.to.provider}\n`
-              );
-            }
-            break;
-          case 'text_delta':
-            pending += event.text;
+            process.stderr.write(
+              `${event.from.provider} failed; retrying on ${event.to.provider}\n`
+            );
             break;
           case 'assistant_turn':
-            if (!event.message.toolCalls?.length && pending) {
-              process.stdout.write(pending);
+            if (!event.message.toolCalls?.length && event.message.content) {
+              process.stdout.write(event.message.content);
               printed = true;
             }
-            pending = '';
             break;
           case 'tool_start':
             process.stderr.write(`· ${event.name}\n`);

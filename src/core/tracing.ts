@@ -28,9 +28,9 @@ const tracer = () => trace.getTracer('solenoid');
 // is enough to store.
 const MAX_REASONING_CHARS = 2000;
 
-export function safeJson(value: unknown): string {
+export function safeJson(value: unknown, indent?: number): string {
   try {
-    return JSON.stringify(value) ?? String(value);
+    return JSON.stringify(value, null, indent) ?? String(value);
   } catch {
     return String(value);
   }
@@ -45,22 +45,21 @@ export function safeMessagesJson(messages: ChatMessage[]): string {
  * Run `fn` inside an active span of the given OpenInference kind. The span is
  * the active context, so nested spans attach to it. Errors are recorded and
  * rethrown.
+ *
+ * `attributes` is a function so that serializing a transcript is skipped
+ * entirely while no tracer provider is registered, which is the default.
  */
 export function withSpanKind<T>(
   kind: SpanKind,
   name: string,
-  attributes: Attributes,
+  attributes: () => Attributes,
   fn: (span: Span) => Promise<T>
 ): Promise<T> {
   return tracer().startActiveSpan(
     name,
-    {
-      attributes: {
-        [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind[kind],
-        ...attributes,
-      },
-    },
+    { attributes: { [SemanticConventions.OPENINFERENCE_SPAN_KIND]: OpenInferenceSpanKind[kind] } },
     async (span) => {
+      if (span.isRecording()) span.setAttributes(attributes());
       try {
         const result = await fn(span);
         span.setStatus({ code: SpanStatusCode.OK });
@@ -111,29 +110,29 @@ export function tracedChat(
   opts: ChatOptions,
   inner: () => Promise<ChatMessage>
 ): Promise<ChatMessage> {
-  const attributes: Attributes = {
-    [SemanticConventions.LLM_MODEL_NAME]: opts.model,
-    [SemanticConventions.LLM_PROVIDER]: providerName,
-    [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safeJson({
-      think: opts.think,
-      format: opts.format?.name,
-      turn: opts.turn,
-    }),
-    [SemanticConventions.INPUT_VALUE]: safeMessagesJson(messages),
-    [SemanticConventions.INPUT_MIME_TYPE]: 'application/json',
+  const attributes = (): Attributes => {
+    const attrs: Attributes = {
+      [SemanticConventions.LLM_MODEL_NAME]: opts.model,
+      [SemanticConventions.LLM_PROVIDER]: providerName,
+      [SemanticConventions.LLM_INVOCATION_PARAMETERS]: safeJson({
+        think: opts.think,
+        turn: opts.turn,
+      }),
+      [SemanticConventions.INPUT_VALUE]: safeMessagesJson(messages),
+      [SemanticConventions.INPUT_MIME_TYPE]: 'application/json',
+    };
+    messages.forEach((m, i) => {
+      Object.assign(attrs, messageAttributes(`${SemanticConventions.LLM_INPUT_MESSAGES}.${i}`, m));
+    });
+    opts.tools.forEach((tool, i) => {
+      attrs[`${SemanticConventions.LLM_TOOLS}.${i}.tool.json_schema`] = safeJson(tool);
+    });
+    return attrs;
   };
-  messages.forEach((m, i) => {
-    Object.assign(
-      attributes,
-      messageAttributes(`${SemanticConventions.LLM_INPUT_MESSAGES}.${i}`, m)
-    );
-  });
-  opts.tools.forEach((tool, i) => {
-    attributes[`${SemanticConventions.LLM_TOOLS}.${i}.tool.json_schema`] = safeJson(tool);
-  });
 
   return withSpanKind('LLM', `chat ${opts.model}`, attributes, async (span) => {
     const msg = await inner();
+    if (!span.isRecording()) return msg;
     span.setAttributes({
       ...messageAttributes(`${SemanticConventions.LLM_OUTPUT_MESSAGES}.0`, msg),
       [SemanticConventions.OUTPUT_VALUE]: msg.content,

@@ -25,14 +25,17 @@
  */
 import {
   type ScreeningResult,
+  type ScreeningBoundary as SecurityScreeningBoundary,
   type TextInput,
   type TextOrigin,
+  type ToolRequest,
   type ToolVerdict,
   currentToolGate,
 } from '@elicollinson/solenoid-security';
-import type { z } from 'zod';
-import type { ChatMessage, ChatProvider, ThinkLevel, TokenUsage } from './providers.js';
-import type { ReviewResult, Reviewer } from './reviewer.js';
+import { z } from 'zod';
+import { AgentAbortedError, abortReason } from './abort.js';
+import type { ChatMessage, ChatProvider, ThinkLevel, TokenUsage, ToolCall } from './providers.js';
+import type { Reviewer } from './reviewer.js';
 import {
   type AgentTool,
   type FunctionToolDefinition,
@@ -68,15 +71,7 @@ export class AgentTimeoutError extends Error {
   }
 }
 
-/** The caller's signal fired. Never retried, never advanced to another route. */
-export class AgentAbortedError extends Error {
-  readonly code = 'AGENT_ABORTED';
-
-  constructor() {
-    super('Agent run was interrupted');
-    this.name = 'AgentAbortedError';
-  }
-}
+export { AgentAbortedError };
 
 export class AgentRunError extends Error {
   readonly code = 'AGENT_RUN_FAILED';
@@ -95,7 +90,7 @@ export class AgentRunError extends Error {
  * everyday runs. Injected text is caught where it arrives, before the model
  * reads it.
  */
-export type ScreeningBoundary = 'input' | 'tool_output';
+export type ScreeningBoundary = Extract<SecurityScreeningBoundary, 'input' | 'tool_output'>;
 
 export class PromptInjectionDetectedError extends Error {
   readonly code = 'PROMPT_INJECTION_DETECTED';
@@ -138,6 +133,8 @@ function isScreeningFailure(error: unknown): boolean {
 export interface ToolOutcome {
   ok: boolean;
   output: string;
+  /** Why the call failed, as a plain message: what `output` says to the model, without the framing. */
+  error?: string;
   /** The output was withheld because the screen flagged it. */
   quarantined?: boolean;
   /** No call was made: the approval handler refused it. */
@@ -155,12 +152,11 @@ export type ModelRouteChain = readonly [ModelRoute, ...ModelRoute[]];
 /** `security.screen` from solenoid-security, or anything with its contract. */
 export type Screener = (input: TextInput) => Promise<ScreeningResult>;
 
-export interface ApprovalRequest {
-  tool: string;
-  kind: ToolKind;
-  /** Validated arguments: a call that fails its schema is refused before anybody is asked. */
-  args: unknown;
-  description: string;
+/**
+ * solenoid-security's tool request, plus the run's signal. `args` are
+ * validated: a call that fails its schema is refused before anybody is asked.
+ */
+export interface ApprovalRequest extends ToolRequest {
   /** The run's signal. An approval outlives no run. */
   signal: AbortSignal;
 }
@@ -189,16 +185,7 @@ export type AgentEvent =
   /** A turn finished and was added to the transcript. */
   | { type: 'assistant_turn'; message: ChatMessage }
   | { type: 'tool_start'; id: string; name: string; kind: ToolKind | 'unknown'; args: unknown }
-  | {
-      type: 'tool_end';
-      id: string;
-      name: string;
-      ok: boolean;
-      output: string;
-      durationMs: number;
-      quarantined?: boolean;
-      declined?: boolean;
-    }
+  | ({ type: 'tool_end'; id: string; name: string; durationMs: number } & ToolOutcome)
   /** The turn in progress failed transiently and will be re-requested. Discard its partial output. */
   | { type: 'retry'; turn: number; delayMs: number; error: string }
   /** The attempt failed and the task restarts on the next route. Discard the whole attempt. */
@@ -272,13 +259,13 @@ interface Attempt {
 }
 
 export class Agent {
-  protected readonly routes: ModelRouteChain;
-  protected readonly systemPrompt?: string;
-  protected readonly tools = new Map<string, AgentTool>();
-  protected readonly reviewers = new Map<string, Reviewer>();
-  protected readonly think: ThinkLevel;
-  protected readonly timeoutMs: number;
-  protected readonly name: string;
+  private readonly routes: ModelRouteChain;
+  private readonly systemPrompt?: string;
+  private readonly tools = new Map<string, AgentTool>();
+  private readonly reviewers = new Map<string, Reviewer>();
+  private readonly think: ThinkLevel;
+  private readonly timeoutMs: number;
+  private readonly name: string;
   private readonly screener?: Screener;
   private readonly requiresApproval: (tool: AgentTool) => boolean;
   private readonly log: AgentLogger;
@@ -386,7 +373,7 @@ export class Agent {
     return withSpanKind(
       'AGENT',
       this.name,
-      {
+      () => ({
         [SemanticConventions.INPUT_VALUE]: safeMessagesJson(messages),
         [SemanticConventions.INPUT_MIME_TYPE]: 'application/json',
         'agent.timeout_ms': this.timeoutMs,
@@ -397,7 +384,7 @@ export class Agent {
             [`agent.routes.${index}.model`, route.model],
           ])
         ),
-      },
+      }),
       async (span) => {
         await this.screenInputs(messages, emit);
         for (let index = 0; index < this.routes.length; index++) {
@@ -476,20 +463,17 @@ export class Agent {
     messages.push({
       role: 'system',
       content: `When the task is complete, call ${SUBMIT_RESULT_TOOL_NAME} with the final result.`,
-      screened: true,
     });
-    const raw = extractJson(await this.loop(messages, attempt));
-    try {
-      return schema.parse(JSON.parse(raw));
-    } catch (err) {
+    const validation = validateStructured(await this.loop(messages, attempt), schema);
+    if (!validation.ok) {
       throw new AgentRunError(
-        `Structured output failed validation after the run reported completion: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err }
+        `Structured output failed validation after the run reported completion: ${validation.error}`
       );
     }
+    return validation.data;
   }
 
-  protected async loop(messages: ChatMessage[], attempt: Attempt): Promise<string> {
+  private async loop(messages: ChatMessage[], attempt: Attempt): Promise<string> {
     const { client, model, signal, emit, schema } = attempt;
     const submitDefinition: FunctionToolDefinition | undefined = schema
       ? {
@@ -560,64 +544,53 @@ export class Agent {
       }
 
       if (msg.toolCalls?.length) {
-        let submitted: string | undefined;
-        let submitFeedback: string | undefined;
+        // One output per call, in call order. Reads run concurrently, screens
+        // included; a write waits for the calls before it and holds back the
+        // ones after, because it may stop for approval and commits the attempt.
+        const outputs: Array<Promise<string>> = [];
+        let reads: Array<Promise<string>> = [];
+        let reviewerFeedback: string | undefined;
 
         for (const call of msg.toolCalls) {
           if (submitDefinition && schema && call.name === SUBMIT_RESULT_TOOL_NAME) {
             if (msg.toolCalls.length > 1) {
-              pushToolResult(
-                messages,
-                call.id,
-                call.name,
-                'Result deferred because this turn requested additional tools. ' +
-                  'Use their results, then submit the final result in its own turn.'
+              outputs.push(
+                Promise.resolve(
+                  'Result deferred because this turn requested additional tools. ' +
+                    'Use their results, then submit the final result in its own turn.'
+                )
               );
               continue;
             }
             const parsed = schema.safeParse(call.arguments);
-            if (parsed.success) {
-              submitted = JSON.stringify(parsed.data);
-              const failed = (await this.reviewCandidate(messages, submitted, attempt)).filter(
-                ({ result }) => !result.passed
-              );
-              if (!failed.length) return submitted;
-              submitFeedback = failed
-                .map(({ name, result }) => `${name} Feedback: ${result.feedback}`)
-                .join('\n');
-            } else {
-              submitFeedback = parsed.error.message;
+            if (!parsed.success) {
+              outputs.push(Promise.resolve(`Result rejected: ${z.prettifyError(parsed.error)}`));
+              continue;
             }
-            pushToolResult(messages, call.id, call.name, `Result rejected: ${submitFeedback}`);
+            const submitted = JSON.stringify(parsed.data);
+            reviewerFeedback = await this.reviewFeedback(messages, submitted, attempt);
+            if (!reviewerFeedback) return submitted;
+            outputs.push(Promise.resolve(`Result rejected: ${reviewerFeedback}`));
             continue;
           }
 
-          const tool = this.tools.get(call.name);
-          emit({
-            type: 'tool_start',
-            id: call.id,
-            name: call.name,
-            kind: tool?.kind ?? 'unknown',
-            args: call.arguments,
-          });
-          const started = performance.now();
-          const result = await this.invokeTool(call.name, call.arguments, attempt);
-          emit({
-            type: 'tool_end',
-            id: call.id,
-            name: call.name,
-            ok: result.ok,
-            output: result.output,
-            durationMs: performance.now() - started,
-            ...(result.quarantined ? { quarantined: true } : {}),
-            ...(result.declined ? { declined: true } : {}),
-          });
-          pushToolResult(messages, call.id, call.name, result.output);
+          if (this.tools.get(call.name)?.kind === 'read') {
+            const output = this.runToolCall(call, attempt);
+            reads.push(output);
+            outputs.push(output);
+            continue;
+          }
+          await Promise.all(reads);
+          reads = [];
+          const output = await this.runToolCall(call, attempt);
+          outputs.push(Promise.resolve(output));
         }
 
-        if (submitted && submitFeedback) {
-          messages.push({ role: 'system', content: submitFeedback, screened: true });
-        }
+        const results = await Promise.all(outputs);
+        msg.toolCalls.forEach((call, i) => {
+          pushToolResult(messages, call.id, call.name, results[i]!);
+        });
+        if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
         continue;
       }
 
@@ -660,25 +633,44 @@ export class Agent {
         continue;
       }
 
-      const failed = (await this.reviewCandidate(messages, content, attempt)).filter(
-        ({ result }) => !result.passed
-      );
-      if (!failed.length) return content;
-      messages.push({
-        role: 'system',
-        content: failed
-          .map(({ name, result }) => `${name} Feedback: ${result.feedback}`)
-          .join('\n'),
-        screened: true,
-      });
+      const feedback = await this.reviewFeedback(messages, content, attempt);
+      if (!feedback) return content;
+      messages.push({ role: 'system', content: feedback });
     }
   }
 
-  protected async reviewCandidate(
+  /** Run one tool call, reporting its start and end. Resolves to what the model is told. */
+  private async runToolCall(call: ToolCall, attempt: Attempt): Promise<string> {
+    const { id, name } = call;
+    attempt.emit({
+      type: 'tool_start',
+      id,
+      name,
+      kind: this.tools.get(name)?.kind ?? 'unknown',
+      args: call.arguments,
+    });
+    const started = performance.now();
+    const result = await this.invokeTool(name, call.arguments, attempt);
+    attempt.emit({
+      type: 'tool_end',
+      id,
+      name,
+      durationMs: performance.now() - started,
+      ...result,
+    });
+    return result.output;
+  }
+
+  /**
+   * Put a candidate to every reviewer, concurrently. Resolves to the combined
+   * feedback of those that failed it, or undefined when all passed.
+   */
+  private async reviewFeedback(
     messages: ChatMessage[],
     output: string,
     attempt: Attempt
-  ): Promise<Array<{ name: string; result: ReviewResult }>> {
+  ): Promise<string | undefined> {
+    if (!this.reviewers.size) return undefined;
     const context = {
       output,
       messages: [...messages],
@@ -686,39 +678,37 @@ export class Agent {
       client: attempt.client,
       model: attempt.model,
     };
-    const reviews: Array<{ name: string; result: ReviewResult }> = [];
-    for (const [name, reviewer] of this.reviewers) {
-      const result = await withSpanKind(
-        'EVALUATOR',
-        name,
-        { [SemanticConventions.INPUT_VALUE]: output },
-        async (span) => {
-          const review = await awaitWithSignal(reviewer.review(context), attempt.signal);
-          span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(review));
-          return review;
-        }
-      );
-      reviews.push({ name, result });
-    }
-    return reviews;
+    const reviews = await Promise.all(
+      [...this.reviewers].map(([name, reviewer]) =>
+        withSpanKind(
+          'EVALUATOR',
+          name,
+          () => ({ [SemanticConventions.INPUT_VALUE]: output }),
+          async (span) => {
+            const review = await awaitWithSignal(reviewer.review(context), attempt.signal);
+            span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(review));
+            return { name, review };
+          }
+        )
+      )
+    );
+    const failed = reviews.filter(({ review }) => !review.passed);
+    if (!failed.length) return undefined;
+    return failed.map(({ name, review }) => `${name} Feedback: ${review.feedback}`).join('\n');
   }
 
-  protected async invokeTool(
-    name: string,
-    rawArgs: unknown,
-    attempt: Attempt
-  ): Promise<ToolOutcome> {
+  private async invokeTool(name: string, rawArgs: unknown, attempt: Attempt): Promise<ToolOutcome> {
     const tool = this.tools.get(name);
     if (!tool) return failed(`unknown tool "${name}"`);
 
     return withSpanKind(
       'TOOL',
       name,
-      {
+      () => ({
         [SemanticConventions.TOOL_NAME]: name,
         [SemanticConventions.TOOL_DESCRIPTION]: tool.definition.function.description,
         [SemanticConventions.TOOL_PARAMETERS]: safeJson(tool.definition.function.parameters),
-      },
+      }),
       async (span) => {
         // try/catch stays inside the span: errors mark the span but are
         // returned to the model so it can self-correct, not thrown.
@@ -826,11 +816,11 @@ export class Agent {
     const result = await withSpanKind(
       'GUARDRAIL',
       'prompt-injection-detection',
-      {
+      () => ({
         [SemanticConventions.INPUT_VALUE]: parts.join('\n'),
         'metadata.boundary': boundary,
         'metadata.origin': origin,
-      },
+      }),
       async (span) => {
         let screened: ScreeningResult;
         try {
@@ -855,7 +845,7 @@ export class Agent {
       type: 'guardrail',
       boundary,
       decision: result.decision,
-      ...(score !== undefined && Number.isFinite(score) ? { score } : {}),
+      ...(Number.isFinite(score) ? { score } : {}),
     });
     if (result.decision === 'observe') {
       // The operator is the principal: a flag on their own text is worth a
@@ -891,28 +881,27 @@ export function extractJson(raw: string): string {
 function validateStructured(
   raw: string,
   schema: z.ZodType
-): { ok: true } | { ok: false; error: string } {
+): { ok: true; data: unknown } | { ok: false; error: string } {
   const json = extractJson(raw);
   if (!json) return { ok: false, error: 'the response was empty' };
+  let value: unknown;
   try {
-    schema.parse(JSON.parse(json));
-    return { ok: true };
+    value = JSON.parse(json);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: message.length > 2_000 ? `${message.slice(0, 2_000)}…` : message };
+    return { ok: false, error: `invalid JSON (${error instanceof Error ? error.message : error})` };
   }
+  const parsed = schema.safeParse(value);
+  return parsed.success
+    ? { ok: true, data: parsed.data }
+    : { ok: false, error: z.prettifyError(parsed.error) };
 }
 
 function failed(message: string): ToolOutcome {
-  return { ok: false, output: `Error: ${message}` };
+  return { ok: false, output: `Error: ${message}`, error: message };
 }
 
 function pushToolResult(messages: ChatMessage[], id: string, name: string, content: string): void {
   messages.push({ role: 'tool', toolCallId: id, toolName: name, content, screened: true });
-}
-
-function abortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new AgentAbortedError();
 }
 
 function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

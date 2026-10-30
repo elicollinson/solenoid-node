@@ -55,10 +55,7 @@ describe('OpenAICompatibleProvider', () => {
         },
       },
     ]);
-    const provider = new OpenAICompatibleProvider(client, {
-      name: 'lmstudio',
-      dialect: 'lmstudio',
-    });
+    const provider = new OpenAICompatibleProvider(client, 'lmstudio');
     const deltas: ChatDelta[] = [];
 
     const msg = await provider.chat([{ role: 'user', content: 'weather?' }], {
@@ -101,10 +98,7 @@ describe('OpenAICompatibleProvider', () => {
       }),
       chunk({ content: 'Hi' }, 'stop'),
     ]);
-    const provider = new OpenAICompatibleProvider(client, {
-      name: 'openrouter',
-      dialect: 'openrouter',
-    });
+    const provider = new OpenAICompatibleProvider(client, 'openrouter');
 
     const msg = await provider.chat([{ role: 'user', content: 'hello' }], {
       model: 'google/gemma-4-26b-a4b-it',
@@ -123,10 +117,7 @@ describe('OpenAICompatibleProvider', () => {
 
   test('echoes the native assistant payload and maps tool results on later turns', async () => {
     const { client, requests } = fakeClient([chunk({ content: 'ok' }, 'stop')]);
-    const provider = new OpenAICompatibleProvider(client, {
-      name: 'lmstudio',
-      dialect: 'lmstudio',
-    });
+    const provider = new OpenAICompatibleProvider(client, 'lmstudio');
     const raw = { role: 'assistant', content: null, tool_calls: [{ id: 't1' }] };
 
     await provider.chat(
@@ -148,12 +139,12 @@ describe('OpenAICompatibleProvider', () => {
   test('think: false disables reasoning in each dialect', async () => {
     const lm = fakeClient([chunk({ content: 'a' }, 'stop')]);
     const or = fakeClient([chunk({ content: 'a' }, 'stop')]);
-    await new OpenAICompatibleProvider(lm.client, { name: 'l', dialect: 'lmstudio' }).chat([], {
+    await new OpenAICompatibleProvider(lm.client, 'lmstudio').chat([], {
       model: 'm',
       tools: [],
       think: false,
     });
-    await new OpenAICompatibleProvider(or.client, { name: 'o', dialect: 'openrouter' }).chat([], {
+    await new OpenAICompatibleProvider(or.client, 'openrouter').chat([], {
       model: 'm',
       tools: [],
       think: false,

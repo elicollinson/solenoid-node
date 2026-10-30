@@ -31,8 +31,4 @@ export class Session {
   clear(): void {
     this.transcript = [];
   }
-
-  get messages(): readonly ChatMessage[] {
-    return this.transcript;
-  }
 }

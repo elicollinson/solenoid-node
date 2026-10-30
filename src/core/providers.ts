@@ -16,6 +16,7 @@ import type { TextOrigin } from '@elicollinson/solenoid-security';
  * repos can converge on one core later.
  */
 import type OpenAI from 'openai';
+import { abortReason } from './abort.js';
 import type { FunctionToolDefinition } from './tools.js';
 import { tracedChat } from './tracing.js';
 
@@ -71,16 +72,6 @@ export interface ChatMessage {
   finishReason?: string;
 }
 
-/**
- * A provider-agnostic structured-output request. `schema` is plain JSON
- * schema (derive it from zod with z.toJSONSchema).
- */
-export interface OutputFormat {
-  /** Identifier for backends that require one: [a-zA-Z0-9_-]. */
-  name: string;
-  schema: Record<string, unknown>;
-}
-
 /** A streamed fragment of the turn in progress. */
 export interface ChatDelta {
   type: 'text' | 'reasoning';
@@ -91,7 +82,6 @@ export interface ChatOptions {
   model: string;
   tools: FunctionToolDefinition[];
   think?: ThinkLevel;
-  format?: OutputFormat;
   signal?: AbortSignal;
   turn?: number;
   /** Called for every text or reasoning fragment as it arrives. */
@@ -113,14 +103,6 @@ export interface ChatProvider {
  */
 export type ReasoningDialect = 'lmstudio' | 'openrouter';
 
-export interface OpenAICompatibleProviderOptions {
-  /** Shown in logs and traces: "lmstudio", "openrouter". */
-  name: string;
-  dialect: ReasoningDialect;
-  /** Sent as max_tokens when set. */
-  maxTokens?: number;
-}
-
 interface StreamedToolCall {
   id: string;
   name: string;
@@ -141,23 +123,15 @@ function parseToolArguments(raw: string): unknown {
   }
 }
 
-function abortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error('Request aborted');
-}
-
 export class OpenAICompatibleProvider implements ChatProvider {
-  readonly providerName: string;
-  private readonly dialect: ReasoningDialect;
-  private readonly maxTokens?: number;
-
+  /**
+   * @param providerName The backend, which also fixes how reasoning is spelled
+   *   on the wire. Shown in logs and traces.
+   */
   constructor(
     private readonly client: OpenAI,
-    options: OpenAICompatibleProviderOptions
-  ) {
-    this.providerName = options.name;
-    this.dialect = options.dialect;
-    this.maxTokens = options.maxTokens;
-  }
+    readonly providerName: ReasoningDialect
+  ) {}
 
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<ChatMessage> {
     return tracedChat(this.providerName, messages, opts, () => this.chatInner(messages, opts));
@@ -165,15 +139,6 @@ export class OpenAICompatibleProvider implements ChatProvider {
 
   private async chatInner(messages: ChatMessage[], opts: ChatOptions): Promise<ChatMessage> {
     const wire = messages.map((m) => this.toWire(m));
-    // OpenAI-compatible servers do not all enforce response_format, so the
-    // schema is also stated as an instruction. The loop validates either way.
-    if (opts.format) {
-      wire.push({
-        role: 'system',
-        content: `Respond with a single JSON object matching this JSON schema, and nothing else — no markdown, no code fences, no commentary:\n${JSON.stringify(opts.format.schema)}`,
-      });
-    }
-
     const stream = await this.client.chat.completions.create(
       {
         model: opts.model,
@@ -183,16 +148,7 @@ export class OpenAICompatibleProvider implements ChatProvider {
         ...(opts.tools.length
           ? { tools: opts.tools as OpenAI.Chat.Completions.ChatCompletionTool[] }
           : {}),
-        ...(this.maxTokens ? { max_tokens: this.maxTokens } : {}),
         ...this.reasoningParams(opts.think),
-        ...(opts.format
-          ? {
-              response_format: {
-                type: 'json_schema' as const,
-                json_schema: { name: opts.format.name, schema: opts.format.schema },
-              },
-            }
-          : {}),
       },
       { signal: opts.signal }
     );
@@ -246,7 +202,7 @@ export class OpenAICompatibleProvider implements ChatProvider {
         }
       }
     }
-    if (opts.signal?.aborted) throw abortError(opts.signal);
+    if (opts.signal?.aborted) throw abortReason(opts.signal);
 
     const streamed = [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
     // Rebuilt rather than taken off the wire: a stream has no single message
@@ -289,7 +245,7 @@ export class OpenAICompatibleProvider implements ChatProvider {
 
   private reasoningParams(think: ThinkLevel | undefined): Record<string, unknown> {
     if (think === undefined || think === true) return {};
-    if (this.dialect === 'openrouter') {
+    if (this.providerName === 'openrouter') {
       return think === false ? { reasoning: { enabled: false } } : { reasoning: { effort: think } };
     }
     // LM Studio reads `none` as "reasoning off".

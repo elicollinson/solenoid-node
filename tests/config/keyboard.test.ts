@@ -5,7 +5,6 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { AppSettingsSchema, KeyboardConfigSchema } from '../../src/config/schema.js';
-import { getInterruptKey } from '../../src/config/settings.js';
 
 describe('KeyboardConfigSchema', () => {
   it('parses with default interrupt key', () => {
@@ -53,13 +52,5 @@ describe('AppSettingsSchema with keyboard', () => {
     if (result.success) {
       expect(result.data.keyboard.interrupt).toBe('escape');
     }
-  });
-});
-
-describe('getInterruptKey', () => {
-  it('returns escape when settings are unavailable', () => {
-    // No settings file in test environment
-    const key = getInterruptKey();
-    expect(key).toBe('escape');
   });
 });

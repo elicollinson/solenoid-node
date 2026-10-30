@@ -77,6 +77,7 @@ Terminal UI (src/ui)            CLI --run (src/cli-runner.ts)
 Each turn streams `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, `assistant_turn`, `tool_start`, `tool_end`, `retry`, `route_advanced`, `guardrail`, `usage`), and the UI and CLI render from these. A run returns its transcript so the next message continues the conversation. The transcript includes provider-native payloads, such as OpenRouter's `reasoning_details`.
 
 - **Errors are turns.** A failed or invalid tool call is reported back to the model so it can correct itself.
+- **Reads run together.** The read tools of one turn, and their screens, run concurrently. A write waits for the calls before it.
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
 

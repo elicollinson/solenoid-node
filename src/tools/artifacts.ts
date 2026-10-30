@@ -46,7 +46,7 @@ Use this when you produce data tables or formatted text that should be preserved
 export const listArtifactsTool = defineTool({
   name: 'list_artifacts',
   description:
-    'List all artifacts created during the current turn: charts, tables and text available for embedding.',
+    'List all artifacts created during the current turn: tables and text available for embedding.',
   kind: 'read',
   schema: z.object({}),
   execute: () => ({
@@ -57,7 +57,7 @@ export const listArtifactsTool = defineTool({
 export const embedArtifactTool = defineTool({
   name: 'embed_artifact',
   description:
-    'Embed a previously created artifact inline in your reply. The UI renders it as a rich element (chart, table, or formatted text) at this point in the response.',
+    'Embed a previously created artifact inline in your reply. The UI renders it as a rich element (table or formatted text) at this point in the response.',
   kind: 'read',
   schema: z.object({
     artifactId: z.string().describe('The ID of the artifact to embed'),

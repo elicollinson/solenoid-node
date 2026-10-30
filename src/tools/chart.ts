@@ -3,15 +3,13 @@
  *
  * render_chart draws a terminal chart inline in the chat. The UI renders the
  * chart from the call's arguments (see ui/components/ChartRenderer.tsx); the
- * tool validates them, records the chart in the turn's artifact store, and
- * tells the model what was drawn.
+ * tool only validates them and tells the model what was drawn. Nothing is
+ * stored, so there is nothing for the model to embed a second time.
  *
  * Data arrays are JSON strings rather than nested arrays, the shape every
- * backend's tool calling handled reliably. A read for the same reason as the
- * artifact tools in ./artifacts.ts: it only touches this turn's display store.
+ * backend's tool calling handled reliably.
  */
 import { z } from 'zod';
-import { saveArtifact } from '../artifacts/index.js';
 import { parseChartArgs } from '../charts/index.js';
 import { defineTool } from '../core/index.js';
 
@@ -68,14 +66,6 @@ Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
     if (!result.success || !result.config) {
       throw new Error(result.error ?? 'Invalid chart arguments');
     }
-    saveArtifact({ type: 'chart', title: result.config.title, data: args });
-    // No artifact id in the result: given one, the model embeds the chart a
-    // second time with embed_artifact and the reply shows it twice.
-    return {
-      status: 'success',
-      chartType: result.config.chartType,
-      title: result.config.title,
-      note: 'The chart is already displayed inline at this point in your reply. Do not embed or redraw it.',
-    };
+    return { status: 'success', chartType: result.config.chartType, title: result.config.title };
   },
 });

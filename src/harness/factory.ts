@@ -13,8 +13,10 @@ import {
 import OpenAI from 'openai';
 import {
   type AppSettings,
+  PROVIDER_KEY_ENV,
   type ProviderName,
   getProviderApiKey,
+  getSearchApiKey,
   getSettingsPath,
 } from '../config/index.js';
 import {
@@ -22,6 +24,7 @@ import {
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
+  type RouteRef,
   type Screener,
 } from '../core/index.js';
 import { McpManager } from '../mcp/index.js';
@@ -39,9 +42,11 @@ function providerKey(provider: ProviderName, settings: AppSettings): string | un
   return provider === 'lmstudio' ? LMSTUDIO_PLACEHOLDER_KEY : undefined;
 }
 
-const MISSING_KEY_HINT = 'export OPENROUTER_API_KEY or set providers.openrouter.api_key';
+function missingKeyHint(provider: ProviderName): string {
+  return `export ${PROVIDER_KEY_ENV[provider]} or set providers.${provider}.api_key`;
+}
 
-export interface RouteChain {
+interface RouteChain {
   routes: ModelRouteChain;
   /** Routes left out because their provider has no credentials. */
   skipped: string[];
@@ -53,41 +58,42 @@ export interface RouteChain {
  * OpenRouter) works on a machine without an OpenRouter key. It fails only
  * when no route is left.
  */
-export function createRoutes(settings: AppSettings): RouteChain {
+function createRoutes(settings: AppSettings): RouteChain {
   const clients = new Map<ProviderName, OpenAICompatibleProvider>();
-  const clientFor = (provider: ProviderName) => {
+  const routes: ModelRoute[] = [];
+  const skipped: string[] = [];
+  for (const { provider, model } of settings.routes) {
+    const apiKey = providerKey(provider, settings);
+    if (apiKey === undefined) {
+      skipped.push(
+        `Skipped route ${provider}: ${model}: no API key (${missingKeyHint(provider)}).`
+      );
+      continue;
+    }
     let client = clients.get(provider);
     if (!client) {
       client = new OpenAICompatibleProvider(
-        new OpenAI({
-          baseURL: settings.providers[provider].base_url,
-          apiKey: providerKey(provider, settings)!,
-          // The agent loop owns retries and fallback.
-          maxRetries: 0,
-        }),
-        { name: provider, dialect: provider }
+        // The agent loop owns retries and fallback.
+        new OpenAI({ baseURL: settings.providers[provider].base_url, apiKey, maxRetries: 0 }),
+        provider
       );
       clients.set(provider, client);
     }
-    return client;
-  };
-  const routes: ModelRoute[] = [];
-  const skipped: string[] = [];
-  for (const route of settings.routes) {
-    if (providerKey(route.provider, settings) === undefined) {
-      skipped.push(`${route.provider}: ${route.model}`);
-      continue;
-    }
-    routes.push({ client: clientFor(route.provider), model: route.model });
+    routes.push({ client, model });
   }
-  if (!routes.length) {
-    throw new Error(`No usable model route: every route needs credentials (${MISSING_KEY_HINT}).`);
+  const [first, ...rest] = routes;
+  if (!first) {
+    throw new Error(
+      `No usable model route: every route needs credentials (${[
+        ...new Set(settings.routes.map((r) => missingKeyHint(r.provider))),
+      ].join('; ')}).`
+    );
   }
-  return { routes: routes as unknown as ModelRouteChain, skipped };
+  return { routes: [first, ...rest], skipped };
 }
 
 /** The screen, or undefined when `screening.enabled` is false. */
-export function createScreener(settings: AppSettings): Screener | undefined {
+function createScreener(settings: AppSettings): Screener | undefined {
   const config = settings.screening;
   if (!config.enabled) return undefined;
   const apiKey = providerKey(config.provider, settings);
@@ -95,7 +101,7 @@ export function createScreener(settings: AppSettings): Screener | undefined {
     // Never silently unscreened: a configured screen that cannot run is a
     // startup error, not a quiet downgrade.
     throw new Error(
-      `Screening is configured on ${config.provider}, which has no API key (${MISSING_KEY_HINT}).`
+      `Screening is configured on ${config.provider}, which has no API key (${missingKeyHint(config.provider)}).`
     );
   }
   const judge = new OpenAICompatibleJudge({
@@ -113,6 +119,8 @@ export function createScreener(settings: AppSettings): Screener | undefined {
 export interface Harness {
   agent: Agent;
   settings: AppSettings;
+  /** The routes the agent tries, in order: `settings.routes` less any that were skipped. */
+  routes: RouteRef[];
   /** Names of the tools the agent holds, built-ins first. */
   toolNames: string[];
   /** Problems that did not stop startup: skipped routes, MCP servers that failed to connect. */
@@ -125,9 +133,8 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   const screen = createScreener(settings);
   const mcp = new McpManager();
   const mcpFailures = await mcp.initialize(settings.mcp_servers);
-  const searchKey = process.env.BRAVE_SEARCH_API_KEY ?? settings.search.brave_search_api_key;
   const tools = [
-    ...builtinTools({ search: settings.search.provider === 'brave' && Boolean(searchKey) }),
+    ...builtinTools({ searchApiKey: getSearchApiKey(settings) }),
     ...mcp.getAgentTools(),
   ];
 
@@ -141,12 +148,14 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     screen,
     logger: agentLogger,
   });
+  const toolNames = agent.toolDefinitions.map((t) => t.function.name);
+  const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));
   agentLogger.info(
     {
       settingsPath: getSettingsPath(),
-      routes: settings.routes,
+      routes: routeRefs,
       screening: settings.screening.enabled,
-      tools: agent.toolDefinitions.map((t) => t.function.name),
+      tools: toolNames,
     },
     'Harness ready'
   );
@@ -154,9 +163,10 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   return {
     agent,
     settings,
-    toolNames: agent.toolDefinitions.map((t) => t.function.name),
+    routes: routeRefs,
+    toolNames,
     warnings: [
-      ...skipped.map((route) => `Skipped route ${route}: no API key (${MISSING_KEY_HINT}).`),
+      ...skipped,
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),
     ],
     close: () => mcp.close(),

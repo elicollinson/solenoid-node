@@ -12,9 +12,8 @@
  */
 import type { ToolVerdict } from '@elicollinson/solenoid-security';
 import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { clearArtifacts } from '../artifacts/index.js';
-import { getInterruptKey } from '../config/index.js';
 import { AgentAbortedError, type AgentEvent, type ApprovalRequest } from '../core/index.js';
 import { declinedMessage, describeRunError } from '../harness/index.js';
 import { uiLogger } from '../utils/logger.js';
@@ -30,11 +29,13 @@ import {
   type MessagePart,
   SettingsScreen,
   StatusBar,
-  type ToolCall,
 } from './components/index.js';
 import { useAgent } from './hooks/index.js';
 
 type Screen = 'chat' | 'settings' | 'help';
+
+/** How much of the streaming reasoning is drawn. */
+const REASONING_TAIL_CHARS = 600;
 
 interface ApprovalState extends PendingApproval {
   resolve: (allow: boolean) => void;
@@ -77,7 +78,7 @@ function AppContent() {
   const [screen, setScreen] = useState<Screen>('chat');
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const interruptKey = useMemo(() => getInterruptKey(), []);
+  const interruptKey = harness.settings.keyboard.interrupt;
   const showReasoning = harness.settings.display.show_reasoning;
 
   // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
@@ -132,7 +133,7 @@ function AppContent() {
         exit();
         return;
       case '/tools': {
-        const routes = harness.settings.routes
+        const routes = harness.routes
           .map((r, i) => `  ${i + 1}. ${r.provider}: ${r.model}`)
           .join('\n');
         const screening = harness.settings.screening;
@@ -174,7 +175,6 @@ function AppContent() {
     let parts: MessagePart[] = [];
     let turnStart = 0;
     let reasoning = '';
-    const toolCalls = new Map<string, ToolCall>();
 
     const textOf = (list: MessagePart[]) =>
       list
@@ -208,8 +208,10 @@ function AppContent() {
           break;
 
         case 'reasoning_delta':
-          reasoning += event.text;
-          if (showReasoning) updateAssistant();
+          if (!showReasoning) break;
+          // Only the tail is drawn (see MessageList); keep no more than that.
+          reasoning = (reasoning + event.text).slice(-REASONING_TAIL_CHARS);
+          updateAssistant();
           break;
 
         case 'text_delta': {
@@ -229,32 +231,35 @@ function AppContent() {
             event.args && typeof event.args === 'object'
               ? (event.args as Record<string, unknown>)
               : { raw: event.args };
-          const toolCall: ToolCall = { id: event.id, name: event.name, status: 'running', args };
-          toolCalls.set(event.id, toolCall);
-          parts.push({ type: 'tool_call', toolCall });
+          parts.push({
+            type: 'tool_call',
+            toolCall: { id: event.id, name: event.name, status: 'running', args },
+          });
           setStatus(`Running: ${event.name}`);
           updateAssistant();
           break;
         }
 
         case 'tool_end': {
-          const toolCall = toolCalls.get(event.id);
-          if (toolCall) {
-            toolCall.status = event.ok && !event.declined ? 'completed' : 'error';
-            if (!event.ok || event.declined) {
-              toolCall.result = event.quarantined
-                ? 'output blocked: possible prompt injection'
-                : event.declined
-                  ? 'declined'
-                  : event.output.replace(/^Error:\s*/, '');
-            }
-            parts = parts.map((p) =>
-              p.type === 'tool_call' && p.toolCall.id === event.id
-                ? { ...p, toolCall: { ...toolCall } }
-                : p
-            );
-            updateAssistant();
-          }
+          const failed = !event.ok || event.declined;
+          const result = event.quarantined
+            ? 'output blocked: possible prompt injection'
+            : event.declined
+              ? 'declined'
+              : event.error;
+          parts = parts.map((p) =>
+            p.type === 'tool_call' && p.toolCall.id === event.id
+              ? {
+                  ...p,
+                  toolCall: {
+                    ...p.toolCall,
+                    status: failed ? 'error' : 'completed',
+                    ...(failed ? { result } : {}),
+                  },
+                }
+              : p
+          );
+          updateAssistant();
           break;
         }
 
@@ -268,7 +273,6 @@ function AppContent() {
           // The task restarts from scratch on the next route.
           parts = [];
           turnStart = 0;
-          toolCalls.clear();
           clearArtifacts();
           setStatus(`${event.from.provider} failed; switching to ${event.to.provider}...`);
           updateAssistant();
@@ -309,7 +313,6 @@ function AppContent() {
     abortRef.current = controller;
     try {
       await session.send(text, { signal: controller.signal, onEvent, approve });
-      for (const tc of toolCalls.values()) if (tc.status === 'running') tc.status = 'completed';
       updateAssistant({ isStreaming: false });
     } catch (error) {
       if (error instanceof AgentAbortedError) {
@@ -334,7 +337,7 @@ function AppContent() {
     return <HelpScreen onClose={() => setScreen('chat')} />;
   }
 
-  const primary = harness.settings.routes[0];
+  const primary = harness.routes[0];
 
   return (
     <Box flexDirection="column" height="100%">

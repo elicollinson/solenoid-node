@@ -47,7 +47,7 @@ const routes = [
     label: 'lmstudio',
     client: new OpenAICompatibleProvider(
       new OpenAI({ baseURL: lmstudioUrl, apiKey: lmstudioKey }),
-      { name: 'lmstudio', dialect: 'lmstudio' }
+      'lmstudio'
     ),
     model: 'google/gemma-4-26b-a4b',
   },
@@ -60,7 +60,7 @@ const routes = [
               baseURL: 'https://openrouter.ai/api/v1',
               apiKey: process.env.OPENROUTER_API_KEY,
             }),
-            { name: 'openrouter', dialect: 'openrouter' }
+            'openrouter'
           ),
           model: 'google/gemma-4-26b-a4b-it',
         },

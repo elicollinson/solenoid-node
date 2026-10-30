@@ -1,7 +1,7 @@
 /**
  * Artifact Store
  *
- * Module-level singleton that holds rich outputs (charts, tables, text) the
+ * Module-level singleton that holds rich outputs (tables, text) the
  * agent produces during a turn, so the UI can render the original content
  * inline instead of the model reconstructing it as ASCII.
  *
@@ -10,9 +10,9 @@
 
 export interface Artifact {
   id: string;
-  type: 'chart' | 'table' | 'text';
+  type: 'table' | 'text';
   title?: string;
-  /** Raw data: chart tool args, {headers, rows} for table, {content} for text */
+  /** {headers, rows} for table, {content} for text */
   data: unknown;
   timestamp: number;
 }

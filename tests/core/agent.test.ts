@@ -154,6 +154,67 @@ describe('Agent loop', () => {
     expect(provider.calls[1]!.find((m) => m.role === 'tool')?.content).toBe('They said no.');
   });
 
+  test('reads in one turn run concurrently; a write waits for them; results keep call order', async () => {
+    const order: string[] = [];
+    const slowRead = (name: string, ms: number) =>
+      defineTool({
+        name,
+        description: `Read ${name}.`,
+        kind: 'read',
+        schema: z.object({}),
+        execute: async () => {
+          order.push(`${name}:start`);
+          await new Promise((resolve) => setTimeout(resolve, ms));
+          order.push(`${name}:end`);
+          return name;
+        },
+      });
+    const log: string[] = [];
+    const turn: ChatMessage = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'a', name: 'slow', arguments: {} },
+        { id: 'b', name: 'fast', arguments: {} },
+        { id: 'c', name: 'save_note', arguments: { note: 'n' } },
+      ],
+    };
+    const provider = new ScriptedProvider('fake', [turn, say('done')]);
+    const agent = new Agent({
+      routes: [{ client: provider, model: 'm' }],
+      tools: [slowRead('slow', 30), slowRead('fast', 1), writeTool(log)],
+    });
+
+    await agent.run('go', {
+      approve: () => {
+        order.push('approve');
+        return { allow: true };
+      },
+    });
+
+    expect(order).toEqual(['slow:start', 'fast:start', 'fast:end', 'slow:end', 'approve']);
+    const results = provider.calls[1]!.filter((m) => m.role === 'tool');
+    expect(results.map((m) => [m.toolCallId, m.content])).toEqual([
+      ['a', 'slow'],
+      ['b', 'fast'],
+      ['c', 'saved'],
+    ]);
+  });
+
+  test('a failed call reports its plain error on tool_end', async () => {
+    const provider = new ScriptedProvider('fake', [call('echo', { wrong: 1 }), say('ok')]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [echoTool] });
+    const events: AgentEvent[] = [];
+
+    await agent.run('go', { onEvent: (e) => events.push(e) });
+
+    const end = events.find((e) => e.type === 'tool_end');
+    expect(end).toMatchObject({ ok: false });
+    if (end?.type !== 'tool_end') throw new Error('no tool_end');
+    expect(end.output).toBe(`Error: ${end.error}`);
+    expect(end.error).not.toStartWith('Error:');
+  });
+
   test('reads are never put to the approval handler', async () => {
     const provider = new ScriptedProvider('fake', [call('echo', { text: 'a' }), say('ok')]);
     const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [echoTool] });

@@ -10,16 +10,21 @@ import { defineTool } from '../core/index.js';
 import { braveSearch } from './brave-search.js';
 import { readWebpage } from './web-reader.js';
 
-export const webSearchTool = defineTool({
-  name: 'universal_search',
-  description:
-    'Search the web with Brave Search. Returns titles, links and snippets. Follow up with read_webpage for detail.',
-  kind: 'read',
-  schema: z.object({
-    query: z.string().describe('The search query string'),
-  }),
-  execute: ({ query }) => braveSearch(query),
-});
+const WEB_SEARCH_DESCRIPTION =
+  'Search the web with Brave Search. Returns titles, links and snippets. Follow up with read_webpage for detail.';
+
+/** Built per harness because it holds the Brave key; offered only when there is one. */
+export function createWebSearchTool(apiKey: string) {
+  return defineTool({
+    name: 'universal_search',
+    description: WEB_SEARCH_DESCRIPTION,
+    kind: 'read',
+    schema: z.object({
+      query: z.string().describe('The search query string'),
+    }),
+    execute: ({ query }) => braveSearch(query, apiKey),
+  });
+}
 
 export const readWebpageTool = defineTool({
   name: 'read_webpage',

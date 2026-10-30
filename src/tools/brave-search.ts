@@ -2,20 +2,15 @@
  * Brave Search Tool
  *
  * Web search integration using the Brave Search API. Returns titles, URLs,
- * and snippets for search queries. API key can be set via environment variable
- * (BRAVE_SEARCH_API_KEY) or in app_settings.yaml.
+ * and snippets for search queries. The caller supplies the key (see
+ * getSearchApiKey in ../config/settings.ts). Failures throw, so the agent
+ * reports them as failed tool calls.
  */
-import { loadSettings } from '../config/index.js';
 import { fetchWithTimeout } from '../utils/fetch.js';
 
 const SEARCH_TIMEOUT_MS = 15_000;
 
-export async function braveSearch(query: string): Promise<string> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    return 'Error: BRAVE_SEARCH_API_KEY not found in environment variables or app_settings.yaml.';
-  }
-
+export async function braveSearch(query: string, apiKey: string): Promise<string> {
   const url = new URL('https://api.search.brave.com/res/v1/web/search');
   url.searchParams.set('q', query);
   url.searchParams.set('count', '10');
@@ -34,7 +29,7 @@ export async function braveSearch(query: string): Promise<string> {
     );
 
     if (!response.ok) {
-      return `Error: Search API returned ${response.status}`;
+      throw new Error(`Search API returned ${response.status}`);
     }
 
     const data = (await response.json()) as {
@@ -57,21 +52,8 @@ export async function braveSearch(query: string): Promise<string> {
     return summary.join('\n\n');
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      return 'Error performing search: Request timed out';
+      throw new Error('Search timed out');
     }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return `Error performing search: ${message}`;
-  }
-}
-
-function getApiKey(): string | undefined {
-  const envKey = process.env.BRAVE_SEARCH_API_KEY;
-  if (envKey) return envKey;
-
-  try {
-    const settings = loadSettings();
-    return settings.search.brave_search_api_key;
-  } catch {
-    return undefined;
+    throw error;
   }
 }

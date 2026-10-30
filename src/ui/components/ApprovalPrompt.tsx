@@ -5,12 +5,10 @@
  * the person answers: y/Enter allows the call, n/Esc declines it.
  */
 import { Box, Text, useInput } from 'ink';
+import type { ApprovalRequest } from '../../core/index.js';
+import { safeJson } from '../../core/tracing.js';
 
-export interface PendingApproval {
-  tool: string;
-  description: string;
-  args: unknown;
-}
+export type PendingApproval = Pick<ApprovalRequest, 'tool' | 'description' | 'args'>;
 
 interface ApprovalPromptProps {
   approval: PendingApproval;
@@ -20,12 +18,7 @@ interface ApprovalPromptProps {
 const MAX_ARGS_CHARS = 400;
 
 function formatArgs(args: unknown): string {
-  let text: string;
-  try {
-    text = JSON.stringify(args, null, 2) ?? String(args);
-  } catch {
-    text = String(args);
-  }
+  const text = safeJson(args, 2);
   return text.length > MAX_ARGS_CHARS ? `${text.slice(0, MAX_ARGS_CHARS)}…` : text;
 }
 

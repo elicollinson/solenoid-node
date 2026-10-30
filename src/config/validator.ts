@@ -1,15 +1,6 @@
 import { parse as parseYaml } from 'yaml';
-import { z } from 'zod';
-import {
-  AgentConfigSchema,
-  DisplayConfigSchema,
-  KeyboardConfigSchema,
-  McpServerSchema,
-  ProvidersConfigSchema,
-  RoutesConfigSchema,
-  ScreeningConfigSchema,
-  SearchConfigSchema,
-} from './schema.js';
+import type { z } from 'zod';
+import { AppSettingsSchema } from './schema.js';
 
 export interface ValidationError {
   path: string;
@@ -69,15 +60,10 @@ function createZodValidator(schema: z.ZodType): SectionValidator {
   };
 }
 
-// Register known section validators
-sectionValidators.set('providers', createZodValidator(ProvidersConfigSchema));
-sectionValidators.set('routes', createZodValidator(RoutesConfigSchema));
-sectionValidators.set('agent', createZodValidator(AgentConfigSchema));
-sectionValidators.set('screening', createZodValidator(ScreeningConfigSchema));
-sectionValidators.set('search', createZodValidator(SearchConfigSchema));
-sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), McpServerSchema)));
-sectionValidators.set('keyboard', createZodValidator(KeyboardConfigSchema));
-sectionValidators.set('display', createZodValidator(DisplayConfigSchema));
+// One validator per top-level section of the settings schema
+for (const [key, schema] of Object.entries(AppSettingsSchema.shape)) {
+  sectionValidators.set(key, createZodValidator(schema));
+}
 
 /**
  * Main entry point - uses specific validator if registered, else just YAML parse

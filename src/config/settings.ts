@@ -149,34 +149,28 @@ export function saveSettings(settings: Record<string, unknown>): void {
   cachedSettings = null; // Clear validated cache so it reloads
 }
 
-/**
- * Get the configured interrupt key.
- * Returns 'escape' if settings are unavailable.
- */
-export function getInterruptKey(): string {
-  try {
-    const config = loadSettings();
-    return config.keyboard.interrupt;
-  } catch {
-    return 'escape';
-  }
-}
-
-const PROVIDER_KEY_ENV: Record<ProviderName, string> = {
+export const PROVIDER_KEY_ENV: Record<ProviderName, string> = {
   lmstudio: 'LMSTUDIO_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
 };
 
 /**
- * The API key for a provider. The environment variable wins over the
- * settings file so secrets can stay out of it.
+ * A secret: the environment variable wins over the settings file so secrets
+ * can stay out of it. Empty counts as unset in both.
  */
+function secret(envVar: string, fromFile: string | undefined): string | undefined {
+  return process.env[envVar] || fromFile || undefined;
+}
+
 export function getProviderApiKey(
   provider: ProviderName,
   settings: AppSettings
 ): string | undefined {
-  const fromEnv = process.env[PROVIDER_KEY_ENV[provider]];
-  if (fromEnv) return fromEnv;
-  const fromFile = settings.providers[provider].api_key;
-  return fromFile ? fromFile : undefined;
+  return secret(PROVIDER_KEY_ENV[provider], settings.providers[provider].api_key);
+}
+
+/** The Brave Search key, or undefined when web search is unavailable. */
+export function getSearchApiKey(settings: AppSettings): string | undefined {
+  if (settings.search.provider !== 'brave') return undefined;
+  return secret('BRAVE_SEARCH_API_KEY', settings.search.brave_search_api_key);
 }
