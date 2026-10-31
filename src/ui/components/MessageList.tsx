@@ -1,173 +1,164 @@
 /**
  * Message List Component
  *
- * Renders the conversation: the person's messages, and each agent reply as
+ * Draws the AG-UI thread: the person's messages, and each agent reply as
  * its text, a status line per tool call, and the components its display
- * tools showed (charts, tables), in the order they arrived. Text streams raw
- * and renders as markdown once complete.
- *
- * The list is a view of the AG-UI thread (see ../thread.ts); components are
- * drawn through the catalog (./catalog.tsx).
+ * tools showed (charts), in the order they arrived. Text streams raw and
+ * renders as markdown once the reply is complete. Components are drawn
+ * through the catalog (./catalog.tsx).
  */
+import type { Message as AgUiMessage, ToolCall as AgUiToolCall, ToolMessage } from '@ag-ui/core';
 import { Box, Text } from 'ink';
-import { memo } from 'react';
+import { toolStatus } from '../../harness/index.js';
+import { type Bubble, type Notice, type ReplyItem, threadBubbles } from '../thread.js';
 import { Markdown } from './Markdown.js';
 import { ActivityView } from './catalog.js';
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  status: 'running' | 'completed' | 'error';
-  result?: string;
-  args?: Record<string, unknown>;
-}
-
-export type MessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall }
-  /** A display component: `activityType` picks it from the catalog. */
-  | { type: 'activity'; id: string; activityType: string; content: Record<string, unknown> };
-
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  isStreaming?: boolean;
-  parts?: MessagePart[];
-  /** The model's reasoning for the turn in progress, when display.show_reasoning is on. */
-  reasoning?: string;
-  wasInterrupted?: boolean;
-}
-
 interface MessageListProps {
-  messages: Message[];
-  maxHeight?: number;
+  thread: readonly AgUiMessage[];
+  notices?: readonly Notice[];
+  /** A reply is in progress. */
+  streaming?: boolean;
+  showReasoning?: boolean;
 }
-
-const statusIcons = {
-  running: '◐',
-  completed: '●',
-  error: '✗',
-} as const;
 
 const roleColors = { user: 'green', assistant: 'cyan', system: 'yellow' } as const;
 const roleLabels = { user: 'You', assistant: 'Solenoid', system: 'System' } as const;
+const statusIcons = { running: '◐', completed: '●', failed: '✗' } as const;
+const statusColors = { running: 'yellow', completed: 'green', failed: 'red' } as const;
 
-const statusColors = {
-  running: 'yellow',
-  completed: 'green',
-  error: 'red',
-} as const;
+/** How much of the streaming reasoning is drawn. */
+const REASONING_TAIL_CHARS = 600;
 
-function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
+function TextItem({
+  text,
+  streaming,
+  cursor,
+}: {
+  text: string;
+  streaming: boolean;
+  cursor: boolean;
+}) {
   return (
-    <Box paddingLeft={4} marginY={0}>
-      <Text color={statusColors[toolCall.status]}>
-        {statusIcons[toolCall.status]} {toolCall.name}
+    <Box paddingLeft={2}>
+      {streaming ? (
+        <Text wrap="wrap">
+          {text}
+          {cursor && <Text color="gray">▌</Text>}
+        </Text>
+      ) : (
+        <Markdown>{text}</Markdown>
+      )}
+    </Box>
+  );
+}
+
+function ToolItem({
+  call,
+  result,
+  streaming,
+}: {
+  call: AgUiToolCall;
+  result: ToolMessage | undefined;
+  streaming: boolean;
+}) {
+  const outcome = toolStatus(result);
+  // No result and the reply is over: the run stopped before this call ended.
+  const status = outcome.status === 'running' && !streaming ? 'failed' : outcome.status;
+  const reason =
+    outcome.status === 'failed' ? outcome.reason : status === 'failed' ? 'not run' : '';
+  return (
+    <Box paddingLeft={4}>
+      <Text color={statusColors[status]}>
+        {statusIcons[status]} {call.function.name}
       </Text>
-      {toolCall.result && toolCall.status === 'error' && (
+      {reason && (
         <Text color="red" dimColor>
           {' '}
-          - {toolCall.result}
+          - {reason}
         </Text>
       )}
     </Box>
   );
 }
 
-// Memoized: a streaming delta replaces only the message in progress, so
-// finished messages (and their charts) are not re-rendered per token.
-const MessageBubble = memo(function MessageBubble({ message }: { message: Message }) {
-  const label = roleLabels[message.role];
-
-  // Render text content - raw while streaming, markdown when complete
-  const renderTextContent = (content: string, isStreaming: boolean, showCursor: boolean) => {
-    if (isStreaming || !content) {
-      // Raw text while streaming to avoid markdown parsing overhead
+function ReplyItemView({
+  item,
+  streaming,
+  last,
+}: {
+  item: ReplyItem;
+  streaming: boolean;
+  last: boolean;
+}) {
+  switch (item.kind) {
+    case 'text':
+      return <TextItem text={item.text} streaming={streaming} cursor={streaming && last} />;
+    case 'tool':
+      return <ToolItem call={item.call} result={item.result} streaming={streaming} />;
+    case 'activity':
       return (
-        <Text wrap="wrap">
-          {content}
-          {showCursor && <Text color="gray">▌</Text>}
-        </Text>
-      );
-    }
-    // Render as markdown when complete
-    return <Markdown>{content}</Markdown>;
-  };
-
-  // Render interleaved parts if available
-  const renderParts = () => {
-    if (!message.parts || message.parts.length === 0) {
-      // Fallback to simple content
-      if (!message.content) return null;
-      return (
-        <Box paddingLeft={2}>
-          {renderTextContent(message.content, !!message.isStreaming, !!message.isStreaming)}
+        <Box flexDirection="column" paddingLeft={2}>
+          <ActivityView activityType={item.message.activityType} content={item.message.content} />
         </Box>
       );
-    }
+  }
+}
 
-    return message.parts.map((part, index) => {
-      if (part.type === 'text') {
-        const isLast = index === message.parts!.length - 1;
-        const showCursor = isLast && !!message.isStreaming;
-        return (
-          // biome-ignore lint/suspicious/noArrayIndexKey: text parts are append-only and never reorder
-          <Box key={`text-${index}`} paddingLeft={2}>
-            {renderTextContent(part.content, !!message.isStreaming, showCursor)}
-          </Box>
-        );
-      }
-      if (part.type === 'activity') {
-        return (
-          <Box key={part.id} flexDirection="column" paddingLeft={2}>
-            <ActivityView activityType={part.activityType} content={part.content} />
-          </Box>
-        );
-      }
-      return <ToolCallDisplay key={part.toolCall.id} toolCall={part.toolCall} />;
-    });
-  };
-
+function BubbleView({ bubble }: { bubble: Bubble }) {
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color={roleColors[message.role]}>
-        {label}
+      <Text bold color={roleColors[bubble.role]}>
+        {roleLabels[bubble.role]}
       </Text>
-      {message.isStreaming && message.reasoning && (
-        <Box paddingLeft={2}>
-          <Text dimColor italic wrap="wrap">
-            {message.reasoning.slice(-600)}
-          </Text>
-        </Box>
-      )}
-      {renderParts()}
-      {!message.isStreaming && message.wasInterrupted && (
-        <Box paddingLeft={2}>
-          <Text dimColor italic>
-            -- interrupted --
-          </Text>
-        </Box>
+      {bubble.role === 'assistant' ? (
+        <>
+          {bubble.reasoning && (
+            <Box paddingLeft={2}>
+              <Text dimColor italic wrap="wrap">
+                {bubble.reasoning.slice(-REASONING_TAIL_CHARS)}
+              </Text>
+            </Box>
+          )}
+          {bubble.items.map((item, i) => (
+            <ReplyItemView
+              key={item.key}
+              item={item}
+              streaming={bubble.streaming}
+              last={i === bubble.items.length - 1}
+            />
+          ))}
+          {bubble.streaming && !bubble.items.length && (
+            <Box paddingLeft={2}>
+              <Text color="gray">▌</Text>
+            </Box>
+          )}
+        </>
+      ) : (
+        <TextItem text={bubble.text} streaming={false} cursor={false} />
       )}
     </Box>
   );
-});
+}
 
-export function MessageList({ messages, maxHeight }: MessageListProps) {
-  if (messages.length === 0) {
+export function MessageList({
+  thread,
+  notices = [],
+  streaming = false,
+  showReasoning = false,
+}: MessageListProps) {
+  const bubbles = threadBubbles(thread, notices, { streaming, showReasoning });
+  if (bubbles.length === 0) {
     return (
       <Box flexDirection="column" paddingY={1}>
         <Text dimColor>No messages yet. Type something to get started!</Text>
       </Box>
     );
   }
-
-  const displayMessages = maxHeight ? messages.slice(-maxHeight) : messages;
-
   return (
     <Box flexDirection="column" paddingY={1}>
-      {displayMessages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
+      {bubbles.map((bubble) => (
+        <BubbleView key={bubble.key} bubble={bubble} />
       ))}
     </Box>
   );

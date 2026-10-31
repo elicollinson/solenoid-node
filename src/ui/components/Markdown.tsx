@@ -7,7 +7,6 @@
 import { Text } from 'ink';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
-import { useMemo } from 'react';
 
 // Configure marked with terminal renderer.
 // Patch: marked-terminal v7.3.0's text renderer returns raw text instead of
@@ -38,6 +37,6 @@ function renderMarkdown(content: string): string {
 }
 
 export function Markdown({ children }: { children: string }) {
-  const rendered = useMemo(() => renderMarkdown(children), [children]);
+  const rendered = renderMarkdown(children);
   return <Text>{rendered}</Text>;
 }

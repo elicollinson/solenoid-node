@@ -3,7 +3,32 @@
  *
  * Type definitions for the Solenoid testing infrastructure.
  */
-import type { Message, MessagePart, ToolCall } from '../components/index.js';
+
+/** A tool call as the test harness's own app draws it. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  status: 'running' | 'completed' | 'error';
+  result?: string;
+  args?: Record<string, unknown>;
+}
+
+export type MessagePart =
+  | { type: 'text'; content: string }
+  | { type: 'tool_call'; toolCall: ToolCall };
+
+/**
+ * A message in the test harness's own app, which keeps this flat shape for
+ * its scripted agents; the real app draws the AG-UI thread.
+ */
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  isStreaming?: boolean;
+  parts?: MessagePart[];
+  wasInterrupted?: boolean;
+}
 
 /**
  * The event stream the test harness's agents produce. The live UI consumes
@@ -205,4 +230,3 @@ export interface CommandResult {
 }
 
 // Re-export commonly used types
-export type { Message, ToolCall, MessagePart };

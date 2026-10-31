@@ -1,0 +1,5 @@
+# React Compiler for the Ink UI (see scripts/react-compiler.ts).
+preload = ["./scripts/preload.ts"]
+
+[test]
+preload = ["./scripts/preload.ts"]

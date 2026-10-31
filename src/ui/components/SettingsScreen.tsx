@@ -7,7 +7,7 @@ import { Box, Text, useInput } from 'ink';
  * Shows model settings, embedding configuration, MCP servers, and
  * per-agent model overrides. Closes on Enter or Escape key press.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   type SectionInfo,
   getAllSections,
@@ -63,14 +63,14 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
   const [showHelp, setShowHelp] = useState(false);
 
   // Calculate visible lines (show lines around current)
-  const visibleRange = useMemo(() => {
-    const maxVisible = 12;
-    const start = Math.max(0, currentLineIndex - Math.floor(maxVisible / 2));
-    const end = Math.min(lines.length, start + maxVisible);
-    return { start, end };
-  }, [currentLineIndex, lines.length]);
+  const maxVisible = 12;
+  const visibleStart = Math.max(0, currentLineIndex - Math.floor(maxVisible / 2));
+  const visibleRange = {
+    start: visibleStart,
+    end: Math.min(lines.length, visibleStart + maxVisible),
+  };
 
-  const startEditing = useCallback((section: SectionInfo) => {
+  const startEditing = (section: SectionInfo) => {
     const yaml = getSectionAsYaml(section.key);
     setEditingSection(section.key);
     setLines(parseYamlToLines(yaml));
@@ -78,9 +78,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     setMode('editing');
     setMessage(null);
     setValidationResult(null);
-  }, []);
+  };
 
-  const handleSave = useCallback(() => {
+  const handleSave = () => {
     if (!editingSection) return;
 
     const yaml = linesToYaml(lines);
@@ -93,9 +93,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
       setMessage({ text: result.errors[0]?.message || 'Validation failed', type: 'error' });
       setValidationResult(result);
     }
-  }, [editingSection, lines]);
+  };
 
-  const handleValidate = useCallback(() => {
+  const handleValidate = () => {
     if (!editingSection) return;
 
     const yaml = linesToYaml(lines);
@@ -108,9 +108,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
       setMessage({ text: result.errors[0]?.message || 'Invalid', type: 'error' });
       setValidationResult(result);
     }
-  }, [editingSection, lines]);
+  };
 
-  const addChildLine = useCallback(() => {
+  const addChildLine = () => {
     const currentIndent = lines[currentLineIndex]?.indent ?? 0;
     const newLine: EditorLine = { content: '', indent: currentIndent + 2 };
     const newLines = [...lines];
@@ -120,9 +120,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     setEditBuffer('');
     setInputKey((k) => k + 1);
     setMode('line-edit');
-  }, [currentLineIndex, lines]);
+  };
 
-  const addSiblingLine = useCallback(() => {
+  const addSiblingLine = () => {
     const currentIndent = lines[currentLineIndex]?.indent ?? 0;
     const newLine: EditorLine = { content: '', indent: currentIndent };
     const newLines = [...lines];
@@ -132,9 +132,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     setEditBuffer('');
     setInputKey((k) => k + 1);
     setMode('line-edit');
-  }, [currentLineIndex, lines]);
+  };
 
-  const deleteLine = useCallback(() => {
+  const deleteLine = () => {
     if (lines.length <= 1) {
       // Don't delete the last line, just clear it
       setLines([{ content: '', indent: 0 }]);
@@ -145,46 +145,43 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     if (currentLineIndex >= newLines.length) {
       setCurrentLineIndex(Math.max(0, newLines.length - 1));
     }
-  }, [currentLineIndex, lines]);
+  };
 
-  const startLineEdit = useCallback(() => {
+  const startLineEdit = () => {
     setEditBuffer(lines[currentLineIndex]?.content || '');
     setInputKey((k) => k + 1);
     setMode('line-edit');
-  }, [currentLineIndex, lines]);
+  };
 
-  const confirmLineEdit = useCallback(
-    (value?: string) => {
-      const contentToSave = value ?? editBuffer;
-      const newLines = [...lines];
-      const currentLine = newLines[currentLineIndex];
-      if (currentLine) {
-        newLines[currentLineIndex] = {
-          indent: currentLine.indent,
-          content: contentToSave,
-        };
-      }
-      setLines(newLines);
-      setMode('editing');
-      // Move to next line
-      if (currentLineIndex < lines.length - 1) {
-        setCurrentLineIndex(currentLineIndex + 1);
-      }
-    },
-    [currentLineIndex, editBuffer, lines]
-  );
-
-  const cancelLineEdit = useCallback(() => {
+  const confirmLineEdit = (value?: string) => {
+    const contentToSave = value ?? editBuffer;
+    const newLines = [...lines];
+    const currentLine = newLines[currentLineIndex];
+    if (currentLine) {
+      newLines[currentLineIndex] = {
+        indent: currentLine.indent,
+        content: contentToSave,
+      };
+    }
+    setLines(newLines);
     setMode('editing');
-  }, []);
+    // Move to next line
+    if (currentLineIndex < lines.length - 1) {
+      setCurrentLineIndex(currentLineIndex + 1);
+    }
+  };
 
-  const backToSelection = useCallback(() => {
+  const cancelLineEdit = () => {
+    setMode('editing');
+  };
+
+  const backToSelection = () => {
     setMode('selection');
     setEditingSection(null);
     setLines([]);
     setMessage(null);
     setValidationResult(null);
-  }, []);
+  };
 
   useInput((input, key) => {
     // Clear message on any input

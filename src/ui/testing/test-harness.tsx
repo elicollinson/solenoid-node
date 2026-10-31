@@ -15,7 +15,7 @@ import { Box, Text, useInput } from 'ink';
  */
 import { render } from 'ink-testing-library';
 import type React from 'react';
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
 // Not harness/index.js, which would load the whole harness (MCP, providers,
@@ -621,7 +621,7 @@ export class SolenoidTestHarness {
         { isActive: isProcessing }
       );
 
-      const handleSubmit = useCallback(async (text: string) => {
+      const handleSubmit = async (text: string) => {
         const trimmed = text.trim();
         if (!trimmed) return;
 
@@ -745,7 +745,7 @@ export class SolenoidTestHarness {
         );
         setIsProcessing(false);
         setStatus('Ready');
-      }, []);
+      };
 
       return (
         <Box flexDirection="column">

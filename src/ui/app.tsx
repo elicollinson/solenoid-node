@@ -7,7 +7,7 @@
  */
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useMemo, useRef, useState } from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
@@ -32,19 +32,13 @@ import {
   StatusBar,
 } from './components/index.js';
 import { useAgent } from './hooks/index.js';
-import { type Notice, createThreadView } from './thread.js';
+import type { Notice } from './thread.js';
 
 type Screen = 'chat' | 'settings' | 'help';
 
 interface ApprovalState extends PendingApproval {
   interruptId: string;
 }
-
-/**
- * How often a streaming reply is redrawn. Every event is folded as it
- * arrives; drawing each token would re-render the list per token.
- */
-const RENDER_INTERVAL_MS = 30;
 
 function formatInterruptHint(interruptKey: string): string {
   const label = interruptKey === 'escape' ? 'Esc' : interruptKey;
@@ -75,7 +69,7 @@ function AppContent() {
   const { exit } = useApp();
   const { harness, session } = useAgent(); // Suspends until the harness is ready
 
-  const [, setRendered] = useState(0);
+  const [thread, setThread] = useState<AgUiMessage[]>([]);
   const [notices, setNotices] = useState<Notice[]>(() =>
     harness.warnings.map((text) => ({ id: crypto.randomUUID(), text, at: 0 }))
   );
@@ -84,17 +78,8 @@ function AppContent() {
   const [screen, setScreen] = useState<Screen>('chat');
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const threadRef = useRef<AgUiMessage[]>([]);
-  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const view = useRef(createThreadView());
   const interruptKey = harness.settings.keyboard.interrupt;
   const showReasoning = harness.settings.display.show_reasoning;
-
-  const thread = threadRef.current;
-  const messages = useMemo(
-    () => view.current(thread, notices, { streaming: isProcessing, showReasoning }),
-    [thread, notices, isProcessing, showReasoning]
-  );
 
   // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
   // useInput cleanup unrefs stdin, and an always-active no-op handler
@@ -125,28 +110,11 @@ function AppContent() {
     { isActive: isProcessing && screen === 'chat' && !approval }
   );
 
+  // The session holds the same thread this client folds, so handlers read
+  // it there rather than from state captured by an older render.
   const addSystemMessage = (text: string) => {
-    setNotices((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), text, at: threadRef.current.length },
-    ]);
-  };
-
-  const render = () => {
-    if (renderTimer.current) clearTimeout(renderTimer.current);
-    renderTimer.current = null;
-    setRendered((n) => n + 1);
-  };
-
-  const fold = (event: AGUIEvent) => {
-    threadRef.current = applyEvent(threadRef.current, event);
-    if (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR) {
-      render();
-    } else if (event.type === EventType.REASONING_MESSAGE_CONTENT && !showReasoning) {
-      // Nothing visible changed.
-    } else {
-      renderTimer.current ??= setTimeout(render, RENDER_INTERVAL_MS);
-    }
+    const at = session.messages.length;
+    setNotices((prev) => [...prev, { id: crypto.randomUUID(), text, at }]);
   };
 
   const handleSlashCommand = (command: string): void => {
@@ -159,10 +127,9 @@ function AppContent() {
         setScreen('settings');
         return;
       case '/clear':
-        threadRef.current = [];
-        view.current = createThreadView();
-        setNotices([]);
         session.clear();
+        setThread([]);
+        setNotices([]);
         return;
       case '/quit':
       case '/exit':
@@ -186,7 +153,7 @@ function AppContent() {
   };
 
   const onEvent = (event: AGUIEvent): void => {
-    fold(event);
+    setThread((current) => applyEvent(current, event));
     switch (event.type) {
       case EventType.STEP_STARTED:
         setStatus('Thinking...');
@@ -214,7 +181,7 @@ function AppContent() {
         if (interrupt) {
           // The interrupt names the call; the thread holds what it asked for.
           const call = interrupt.toolCallId
-            ? findToolCall(threadRef.current, interrupt.toolCallId)
+            ? findToolCall(session.messages, interrupt.toolCallId)
             : undefined;
           const tool = call?.function.name ?? 'a tool';
           setApproval({
@@ -237,7 +204,7 @@ function AppContent() {
     session.resume([approvalAnswer(approval.interruptId, allow ? 'allow' : 'decline')]);
   };
 
-  const handleSubmit = async (text: string) => {
+  const handleSubmit = (text: string) => {
     uiLogger.info({ text }, 'handleSubmit called');
 
     if (text.startsWith('/')) {
@@ -247,24 +214,26 @@ function AppContent() {
 
     setIsProcessing(true);
     setStatus('Thinking...');
-
     const controller = new AbortController();
     abortRef.current = controller;
-    try {
-      await session.send(text, { signal: controller.signal, onEvent });
-    } catch (error) {
-      if (error instanceof AgentAbortedError) {
-        addSystemMessage('Interrupted.');
-      } else {
-        uiLogger.error({ error: String(error) }, 'Run failed');
-        addSystemMessage(describeRunError(error));
-      }
-    } finally {
-      abortRef.current = null;
-      setApproval(null);
-      setIsProcessing(false);
-      setStatus('Ready');
-    }
+    // A promise chain rather than try/finally, which React Compiler cannot
+    // compile yet.
+    session
+      .send(text, { signal: controller.signal, onEvent })
+      .catch((error) => {
+        if (error instanceof AgentAbortedError) {
+          addSystemMessage('Interrupted.');
+        } else {
+          uiLogger.error({ error: String(error) }, 'Run failed');
+          addSystemMessage(describeRunError(error));
+        }
+      })
+      .then(() => {
+        abortRef.current = null;
+        setApproval(null);
+        setIsProcessing(false);
+        setStatus('Ready');
+      });
   };
 
   if (screen === 'settings') {
@@ -280,7 +249,12 @@ function AppContent() {
     <Box flexDirection="column" height="100%">
       <Header />
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <MessageList messages={messages} />
+        <MessageList
+          thread={thread}
+          notices={notices}
+          streaming={isProcessing}
+          showReasoning={showReasoning}
+        />
       </Box>
       {approval ? (
         <ApprovalPrompt approval={approval} onAnswer={answerApproval} />

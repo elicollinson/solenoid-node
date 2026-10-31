@@ -1,9 +1,9 @@
 /**
- * The terminal's view of an AG-UI thread.
+ * Grouping the AG-UI thread into what the message list draws.
  */
 import { describe, expect, test } from 'bun:test';
 import type { Message } from '@ag-ui/core';
-import { createThreadView } from '../../../src/ui/thread.js';
+import { threadBubbles } from '../../../src/ui/thread.js';
 
 const thread: Message[] = [
   { id: 'u1', role: 'user', content: 'chart please' },
@@ -13,59 +13,49 @@ const thread: Message[] = [
     content: 'Here you go.',
     toolCalls: [
       { id: 'c1', type: 'function', function: { name: 'render_chart', arguments: '{}' } },
-      { id: 'c2', type: 'function', function: { name: 'read_webpage', arguments: '{"url":"x"}' } },
     ],
   },
-  { id: 'c1:display', role: 'activity', activityType: 'solenoid.chart', content: { chartType: 'bar' } },
-  { id: 'c1:result', role: 'tool', toolCallId: 'c1', content: 'Shown to the person in the chat.' },
-  {
-    id: 'c2:result',
-    role: 'tool',
-    toolCallId: 'c2',
-    content: 'Error: HTTP 404',
-    error: 'HTTP 404',
-  },
+  { id: 'c1:display', role: 'activity', activityType: 'solenoid.chart', content: {} },
+  { id: 'c1:result', role: 'tool', toolCallId: 'c1', content: 'Shown.' },
 ];
+const idle = { streaming: false, showReasoning: false };
 
-describe('toView', () => {
-  test('one reply per user message: text, tool status lines, then components', () => {
-    const view = createThreadView()(thread, [], { streaming: false, showReasoning: false });
-
-    expect(view.map((m) => m.role)).toEqual(['user', 'assistant']);
-    const parts = view[1]!.parts!;
-    expect(parts.map((p) => p.type)).toEqual(['text', 'tool_call', 'tool_call', 'activity']);
-    expect(parts[1]).toMatchObject({ toolCall: { name: 'render_chart', status: 'completed' } });
-    expect(parts[2]).toMatchObject({
-      toolCall: { name: 'read_webpage', status: 'error', result: 'HTTP 404' },
-    });
-    expect(parts[3]).toMatchObject({ activityType: 'solenoid.chart' });
+describe('threadBubbles', () => {
+  test('one reply per user message: text, tool calls with their results, then components', () => {
+    const [first, second] = threadBubbles(thread, [], idle);
+    expect(first).toEqual({ role: 'user', key: 'u1', text: 'chart please' });
+    if (second?.role !== 'assistant') throw new Error('expected a reply');
+    expect(second.items.map((i) => i.kind)).toEqual(['text', 'tool', 'activity']);
+    expect(second.items[1]).toMatchObject({ result: thread[3] });
   });
 
-  test('a call with no result is running while the reply streams', () => {
-    const open = thread.slice(0, 2);
-    const view = createThreadView()(open, [], { streaming: true, showReasoning: false });
-    expect(view[1]!.parts![1]).toMatchObject({ toolCall: { status: 'running' } });
-    expect(view[1]!.isStreaming).toBe(true);
+  test('items carry the thread’s own message objects, so unchanged rows can be skipped', () => {
+    const [, reply] = threadBubbles(thread, [], idle);
+    if (reply?.role !== 'assistant') throw new Error('expected a reply');
+    const tool = reply.items[1];
+    expect(tool?.kind === 'tool' && tool.call).toBe(
+      (thread[1] as Extract<Message, { role: 'assistant' }>).toolCalls![0]!
+    );
+  });
+
+  test('only the last reply streams, and not once a notice follows it', () => {
+    const streaming = { streaming: true, showReasoning: false };
+    const bubbles = threadBubbles(thread, [], streaming);
+    expect(bubbles.at(-1)).toMatchObject({ role: 'assistant', streaming: true });
+    const after = threadBubbles(thread, [{ id: 'n', text: 'Interrupted.', at: 4 }], streaming);
+    expect(after.map((b) => b.role)).toEqual(['user', 'assistant', 'system']);
+    expect(after[1]).toMatchObject({ streaming: false });
   });
 
   test('notices sit where they were posted', () => {
-    const view = createThreadView()(
+    const bubbles = threadBubbles(
       thread,
       [
         { id: 'n0', text: 'warning', at: 0 },
         { id: 'n1', text: 'done', at: thread.length },
       ],
-      { streaming: false, showReasoning: false }
+      idle
     );
-    expect(view.map((m) => m.id)).toEqual(['n0', 'u1', 'a1', 'n1']);
-  });
-
-  test('an unchanged reply is the same object, so a memoized bubble skips rendering', () => {
-    const view = createThreadView();
-    const options = { streaming: false, showReasoning: false };
-    const first = view(thread, [], options);
-    const next = [...thread, { id: 'u2', role: 'user' as const, content: 'again' }];
-    const second = view(next, [], options);
-    expect(second[1]).toBe(first[1]!);
+    expect(bubbles.map((b) => b.key)).toEqual(['n0', 'u1', 'a1', 'n1']);
   });
 });
