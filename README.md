@@ -110,13 +110,13 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 | Tool | Does |
 |------|------|
 | `spawn_subagent(name, task, tools?)` | Starts a child session in the background, with the parent's tools (or a subset) minus these |
-| `list_subagents`, `subagent_status(id)` | Where each stands: running, done, failed or cancelled, and its answer |
-| `subagent_summary(id)` | A model-written summary of its work |
+| `list_subagents`, `subagent_status(id)` | Where each stands: queued, running, done, failed or cancelled, and its answer |
+| `subagent_summary(id)` | A model-written summary of its work, reused until its transcript grows |
 | `read_subagent_transcript(id, from, count)` | A page of its transcript in detail |
 | `wait_for_subagents(ids?, mode, timeoutSeconds)` | Blocks until all (or any) finish; waiting does not spend the parent's deadline |
 | `cancel_subagent(id)` | Stops one |
 
-Subagents live in memory with their session. Spawning commits the parent's attempt, so a route fallback never starts one twice. Nobody can approve a subagent's write yet, so those are declined as unattended.
+Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model serves one request at a time. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended and listed in its status.
 
 ### Screening
 

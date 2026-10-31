@@ -28,10 +28,13 @@ function managerWith(scripts: Step[][], tools: AgentTool[] = [echo, note]) {
   const given: string[][] = [];
   const manager = new SubagentManager({
     tools,
-    createSession: (_name, childTools) => {
+    createSession: (_name, childTools, options) => {
       given.push(childTools.map((t) => t.definition.function.name));
       const provider = new ScriptedProvider('child', scripts.shift() ?? []);
-      return new Session(new Agent({ routes: [{ client: provider, model: 'm' }], tools: childTools }));
+      return new Session(
+        new Agent({ routes: [{ client: provider, model: 'm' }], tools: childTools }),
+        options
+      );
     },
     summarize: async (task, transcript) => `summary of "${task}" from ${transcript.split('\n').length} entries`,
   });
@@ -46,7 +49,7 @@ describe('SubagentManager', () => {
     expect(child).toMatchObject({ id: 'sa-1', status: 'running' });
     expect(given[0]).toEqual(['echo', 'save_note']);
 
-    expect(await manager.wait(undefined, 'all', 5_000)).toBe(true);
+    expect(await manager.wait(manager.select(), 'all', 5_000, new AbortController().signal)).toBe(true);
     expect(manager.get('sa-1')).toMatchObject({ status: 'done', answer: 'Found it.' });
     const { entries, total } = manager.transcript('sa-1', 0, 10);
     expect(total).toBe(4);
@@ -67,7 +70,7 @@ describe('SubagentManager', () => {
     const { manager } = managerWith([[call('save_note', { note: 'x' }), say('Could not save.')]]);
     manager.spawn('writer', 'save a note');
 
-    await manager.wait(undefined, 'all', 5_000);
+    await manager.wait(manager.select(), 'all', 5_000, new AbortController().signal);
     const child = manager.get('sa-1');
     expect(child.status).toBe('done');
     expect(child.declined).toHaveLength(1);
@@ -80,7 +83,7 @@ describe('SubagentManager', () => {
     const { manager } = managerWith([[hang]]);
     manager.spawn('slow', 'take forever');
 
-    expect(await manager.wait(['sa-1'], 'all', 20)).toBe(false);
+    expect(await manager.wait(manager.select(['sa-1']), 'all', 20, new AbortController().signal)).toBe(false);
     manager.cancel('sa-1');
     await manager.get('sa-1').settled;
     expect(manager.get('sa-1').status).toBe('cancelled');
@@ -105,7 +108,7 @@ describe('Subagent tools in the loop', () => {
 
     await expect(parent.run('go')).rejects.toThrow('route broke');
     expect(second.calls).toHaveLength(0);
-    expect(manager.list()).toHaveLength(1);
+    expect(manager.select()).toHaveLength(1);
   });
 
   test('waiting on subagents does not spend the parent deadline', async () => {
@@ -129,5 +132,35 @@ describe('Subagent tools in the loop', () => {
 
     expect(await parent.run('go')).toBe('All done.');
     expect(manager.get('sa-1').status).toBe('done');
+  });
+});
+
+describe('Subagent queue', () => {
+  test('at most two run at once; the rest queue and start as slots free', async () => {
+    const hang: Step = () => new Promise<never>(() => {}) as never;
+    const { manager } = managerWith([[hang], [hang], [say('third done')]]);
+    manager.spawn('a', 'one');
+    manager.spawn('b', 'two');
+    const third = manager.spawn('c', 'three');
+    expect(third.status).toBe('queued');
+
+    manager.cancel('sa-1');
+    await manager.wait([third], 'all', 5_000, new AbortController().signal);
+    expect(third).toMatchObject({ status: 'done', answer: 'third done' });
+    manager.close();
+  });
+
+  test('a subagent cancelled while queued never starts', async () => {
+    const hang: Step = () => new Promise<never>(() => {}) as never;
+    const { manager, given } = managerWith([[hang], [hang], [say('never')]]);
+    manager.spawn('a', 'one');
+    manager.spawn('b', 'two');
+    const third = manager.spawn('c', 'three');
+
+    manager.cancel(third.id);
+    await third.settled;
+    expect(third.status).toBe('cancelled');
+    expect(given).toHaveLength(3);
+    manager.close();
   });
 });

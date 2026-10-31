@@ -22,6 +22,7 @@ import {
 import {
   Agent,
   type AgentTool,
+  type ApprovalHandler,
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
@@ -39,7 +40,7 @@ import {
   withToday,
 } from './prompt.js';
 import { Session } from './session.js';
-import { SubagentManager } from './subagents.js';
+import { SubagentManager, subagentToolNames } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
 const LMSTUDIO_PLACEHOLDER_KEY = 'lm-studio';
@@ -126,19 +127,19 @@ function createScreener(settings: AppSettings): Screener | undefined {
 }
 
 export interface Harness {
-  agent: Agent;
   settings: AppSettings;
   /** The routes the agent tries, in order: `settings.routes` less any that were skipped. */
   routes: RouteRef[];
-  /** Names of the tools the agent holds, built-ins first. */
+  /** Names of the tools a session that can spawn holds, built-ins first. */
   toolNames: string[];
   /** Problems that did not stop startup: skipped routes, MCP servers that failed to connect. */
   warnings: string[];
   /**
    * A new conversation. With `canSpawn`, its agent also holds the subagent
    * tools and can start child sessions, which never can themselves.
+   * `approve` replaces the approval interrupts (see SessionOptions).
    */
-  createSession(options?: { canSpawn?: boolean }): Session;
+  createSession(options?: { canSpawn?: boolean; approve?: ApprovalHandler }): Session;
   close(): Promise<void>;
 }
 
@@ -165,7 +166,6 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       screen,
       logger: agentLogger,
     });
-  const agent = makeAgent('solenoid', tools, systemPrompt);
 
   // One summarizer for every session's subagents: no tools, and the
   // transcript it reads is this process's own agents' work.
@@ -181,23 +181,40 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     return result.output;
   };
 
-  const managers: SubagentManager[] = [];
-  const createSession = ({ canSpawn = false }: { canSpawn?: boolean } = {}): Session => {
-    if (!canSpawn) return new Session(agent);
+  // Every open session, so closing the harness closes them and their subagents.
+  const sessions = new Set<Session>();
+  const track = (session: Session) => {
+    sessions.add(session);
+    return session;
+  };
+  const plainAgent = makeAgent('solenoid', tools, systemPrompt);
+
+  const createSession: Harness['createSession'] = ({ canSpawn = false, approve } = {}) => {
+    if (!canSpawn) return track(new Session(plainAgent, { approve }));
     const manager = new SubagentManager({
       tools,
-      createSession: (name, childTools) =>
+      createSession: (name, childTools, options) =>
         new Session(
-          makeAgent(`solenoid/${name}`, childTools, `${systemPrompt}\n\n${SUBAGENT_ROLE}`)
+          makeAgent(`solenoid/${name}`, childTools, `${systemPrompt}\n\n${SUBAGENT_ROLE}`),
+          options
         ),
       summarize,
     });
-    managers.push(manager);
-    return new Session(
-      makeAgent('solenoid', [...tools, ...manager.tools()], `${systemPrompt}\n\n${SUBAGENT_GUIDE}`)
+    const agent = makeAgent(
+      'solenoid',
+      [...tools, ...manager.tools()],
+      `${systemPrompt}\n\n${SUBAGENT_GUIDE}`
     );
+    const session: Session = new Session(agent, {
+      approve,
+      onClose: () => {
+        manager.close();
+        sessions.delete(session);
+      },
+    });
+    return track(session);
   };
-  const toolNames = agent.toolDefinitions.map((t) => t.function.name);
+  const toolNames = [...tools.map((t) => t.definition.function.name), ...subagentToolNames()];
   const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));
   agentLogger.info(
     {
@@ -210,7 +227,6 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   );
 
   return {
-    agent,
     settings,
     routes: routeRefs,
     toolNames,
@@ -220,7 +236,7 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     ],
     createSession,
     close: async () => {
-      for (const manager of managers) manager.close();
+      for (const session of sessions) session.close();
       await mcp.close();
     },
   };

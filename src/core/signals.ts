@@ -63,6 +63,7 @@ export class Deadline {
   private remaining: number;
   private armedAt = 0;
   private holds = 0;
+  private cleared = false;
 
   constructor(
     ms: number,
@@ -80,18 +81,22 @@ export class Deadline {
     });
   }
 
+  /** Stop for good: a hold that settles later does not start the clock again. */
   clear(): void {
+    this.cleared = true;
     clearTimeout(this.timer);
     this.timer = undefined;
   }
 
   private arm(): void {
+    if (this.cleared) return;
     this.armedAt = performance.now();
     this.timer = setTimeout(this.expire, Math.max(0, this.remaining));
   }
 
   private disarm(): void {
-    this.clear();
+    clearTimeout(this.timer);
+    this.timer = undefined;
     this.remaining -= performance.now() - this.armedAt;
   }
 }

@@ -19,6 +19,7 @@ import type { ToolVerdict } from '@elicollinson/solenoid-security';
 import {
   type Agent,
   AgentAbortedError,
+  type ApprovalHandler,
   type ApprovalRequest,
   type ChatMessage,
 } from '../core/index.js';
@@ -40,6 +41,27 @@ export interface SendOptions {
   /** Every AG-UI event of the turn, in order. */
   onEvent: (event: AGUIEvent) => void;
   signal?: AbortSignal;
+  /**
+   * Who wrote the message, for the injection screen. A person typing to
+   * their own agent by default; `agent` for a task one agent hands another.
+   */
+  origin?: 'operator' | 'agent';
+}
+
+export interface SessionOptions {
+  /**
+   * How writes are approved. By default each one ends the AG-UI run with an
+   * interrupt for the client to answer with `resume`; with nobody there to
+   * answer (an unattended CLI run, a subagent) pass a policy instead.
+   */
+  approve?: ApprovalHandler;
+  /** Called once by `close`, for whatever the session holds (its subagents). */
+  onClose?: () => void;
+}
+
+/** An approval policy for a session nobody is attending: decline every write, saying so. */
+export function declineUnattended(request: ApprovalRequest): ToolVerdict {
+  return { allow: false, tell: declinedMessage(request.tool, 'unattended') };
 }
 
 /**
@@ -61,7 +83,19 @@ export class Session {
   private thread: Message[] = [];
   private readonly pending = new Map<string, (entry: ResumeEntry) => void>();
 
-  constructor(private readonly agent: Agent) {}
+  private closed = false;
+
+  constructor(
+    private readonly agent: Agent,
+    private readonly options: SessionOptions = {}
+  ) {}
+
+  /** Release what the session holds. Once only. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.options.onClose?.();
+  }
 
   /** The AG-UI thread so far. */
   get messages(): readonly Message[] {
@@ -73,8 +107,8 @@ export class Session {
    * interrupts in between; rejects with the error that ended it, after the
    * stream has reported it (RUN_ERROR, or a cancelled RUN_FINISHED).
    */
-  async send(text: string, { onEvent, signal }: SendOptions): Promise<string> {
-    const user: ChatMessage = { role: 'user', content: text, origin: 'operator' };
+  async send(text: string, { onEvent, signal, origin = 'operator' }: SendOptions): Promise<string> {
+    const user: ChatMessage = { role: 'user', content: text, origin };
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
@@ -90,7 +124,7 @@ export class Session {
       const result = await this.agent.runMessages([...this.transcript, user], {
         signal,
         onEvent: (event) => encoder.handle(event),
-        approve: (request) => this.interrupt(request, encoder),
+        approve: this.options.approve ?? ((request) => this.interrupt(request, encoder)),
       });
       this.transcript = result.messages;
       encoder.complete();

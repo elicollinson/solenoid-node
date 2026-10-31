@@ -10,10 +10,9 @@ import { EventType } from '@ag-ui/core';
 import { loadSettings } from './config/index.js';
 import {
   CUSTOM_EVENTS,
-  Session,
-  approvalAnswer,
   createHarness,
   customValue,
+  declineUnattended,
   describeRouteAdvance,
   describeRunError,
 } from './harness/index.js';
@@ -46,9 +45,12 @@ export async function runNonInteractive(
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
 
-    // Nobody is here to answer an approval: --yes allows it, and otherwise
-    // it is cancelled, which the agent hears as an unattended decline.
-    const session = harness.createSession({ canSpawn: true });
+    // Nobody is here to answer an approval: --yes allows every write, and
+    // otherwise each is declined as unattended.
+    const session = harness.createSession({
+      canSpawn: true,
+      approve: options.yes ? () => ({ allow: true }) : declineUnattended,
+    });
     const answer = await session.send(prompt, {
       signal: controller.signal,
       onEvent: (event) => {
@@ -57,12 +59,6 @@ export async function runNonInteractive(
           process.stderr.write(`· ${event.toolCallName}\n`);
         } else if (route) {
           process.stderr.write(`${describeRouteAdvance(route)}\n`);
-        } else if (event.type === EventType.RUN_FINISHED && event.outcome?.type === 'interrupt') {
-          session.resume(
-            event.outcome.interrupts.map((i) =>
-              approvalAnswer(i.id, options.yes ? 'allow' : 'unattended')
-            )
-          );
         }
       },
     });

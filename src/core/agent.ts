@@ -51,6 +51,7 @@ import {
 import type { Reviewer } from './reviewer.js';
 import { Deadline, abortReason, awaitWithSignal, waitFor } from './signals.js';
 import { extractJson, validateStructured } from './structured.js';
+import { truncate } from './text.js';
 import {
   type AgentTool,
   type ApprovalHandler,
@@ -870,10 +871,6 @@ function argumentError(rawArgs: unknown, error: z.ZodError): string {
     return `the arguments were not valid JSON, so the call was not made. Send one JSON object. Received: ${truncate(rawArgs, MAX_ECHOED_ARGS_CHARS)}`;
   }
   return `invalid arguments, so the call was not made.\n${z.prettifyError(error)}\nYou sent: ${truncate(safeJson(rawArgs), MAX_ECHOED_ARGS_CHARS)}`;
-}
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /** A display call's arguments as its tool defined them, without the loop's `done`. */
