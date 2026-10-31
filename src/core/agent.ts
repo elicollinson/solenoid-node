@@ -67,6 +67,12 @@ import {
 } from './tracing.js';
 
 export const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Model calls per attempt. The last one is offered no tools, so a model that
+ * keeps calling them (redrawing a chart it cannot see, say) has to answer
+ * with what it has instead of running until the deadline.
+ */
+export const DEFAULT_MAX_TURNS = 25;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
 /** What the model is told in place of a quarantined tool output. */
 const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; output blocked.';
@@ -93,6 +99,8 @@ export interface AgentOptions {
   think?: ThinkLevel;
   /** Per-attempt deadline, including model continuations and tool calls. */
   timeoutMs?: number;
+  /** Model calls per attempt; the last is offered no tools. */
+  maxTurns?: number;
   /** Name shown on the AGENT root span. */
   name?: string;
   /**
@@ -151,6 +159,7 @@ export class Agent {
   private readonly reviewers = new Map<string, Reviewer>();
   private readonly think: ThinkLevel;
   private readonly timeoutMs: number;
+  private readonly maxTurns: number;
   private readonly name: string;
   private readonly screener?: Screener;
   private readonly requiresApproval: (tool: AgentTool) => boolean;
@@ -165,6 +174,10 @@ export class Agent {
     this.systemPrompt = opts.systemPrompt;
     this.think = opts.think ?? true;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+    this.maxTurns = opts.maxTurns ?? DEFAULT_MAX_TURNS;
+    if (!Number.isInteger(this.maxTurns) || this.maxTurns < 1) {
+      throw new Error('maxTurns must be a positive integer');
+    }
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new Error('timeoutMs must be a positive finite number');
     }
@@ -377,9 +390,25 @@ export class Agent {
     let turn = 0;
     let retryDelayMs = 250;
     let retries = 0;
+    let toldFinalTurn = false;
     while (true) {
       if (signal.aborted) throw abortReason(signal);
       turn++;
+      if (turn > this.maxTurns) {
+        throw new AgentRunError(`No answer after ${this.maxTurns} model turns`);
+      }
+      const finalTurn = turn === this.maxTurns;
+      if (finalTurn && !toldFinalTurn) {
+        toldFinalTurn = true;
+        // A user turn, like the continuation prompts: chat templates such as
+        // Gemma's accept a system message only at the start.
+        messages.push({
+          role: 'user',
+          content:
+            'This is your last turn and no tools are available. Answer now from what you already have, and say plainly what you could not finish.',
+          screened: true,
+        });
+      }
       emit({ type: 'turn_start', turn, route });
 
       let msg: ChatMessage;
@@ -387,7 +416,7 @@ export class Agent {
         msg = await awaitWithSignal(
           client.chat(messages, {
             model,
-            tools: toolDefs,
+            tools: finalTurn ? [] : toolDefs,
             think: this.think,
             signal,
             turn,
@@ -429,6 +458,10 @@ export class Agent {
         throw new AgentRunError(`Model declined the request (finish reason: ${msg.finishReason})`);
       }
 
+      if (msg.toolCalls?.length && finalTurn) {
+        // Offered none: a backend that relays a call anyway must not run it.
+        throw new AgentRunError(`Model still called tools on its last turn (${this.maxTurns})`);
+      }
       if (msg.toolCalls?.length) {
         // One output per call, in call order. Everything but a write runs
         // concurrently, screens included. A write waits for the calls before
@@ -540,13 +573,24 @@ export class Agent {
     });
     const started = performance.now();
     const result = await this.invokeTool(name, call.arguments, attempt);
-    attempt.emit({
-      type: 'tool_end',
-      id,
-      name,
-      durationMs: performance.now() - started,
-      ...result,
-    });
+    const durationMs = Math.round(performance.now() - started);
+    // A failure is logged with what was sent: the record a person needs to
+    // see why a call keeps failing. Successes stay one short line.
+    if (result.ok) {
+      this.log.info({ tool: name, durationMs, declined: result.declined }, '[tool] call');
+    } else {
+      this.log.warn(
+        {
+          tool: name,
+          durationMs,
+          error: result.error,
+          quarantined: result.quarantined,
+          args: truncate(safeJson(call.arguments), MAX_ECHOED_ARGS_CHARS),
+        },
+        '[tool] call failed'
+      );
+    }
+    attempt.emit({ type: 'tool_end', id, name, durationMs, ...result });
     return result.output;
   }
 
@@ -602,7 +646,14 @@ export class Agent {
         // try/catch stays inside the span: errors mark the span but are
         // returned to the model so it can self-correct, not thrown.
         try {
-          const args = tool.schema.parse(rawArgs); // validate at the boundary
+          // Validate at the boundary, and say what was wrong with what was sent:
+          // a model can only correct a call it can see the fault in.
+          const parsed = tool.schema.safeParse(rawArgs);
+          if (!parsed.success) {
+            span.setStatus({ code: SpanStatusCode.ERROR });
+            return failed(argumentError(rawArgs, parsed.error));
+          }
+          const args = parsed.data;
           if (span.isRecording())
             span.setAttribute(SemanticConventions.INPUT_VALUE, safeJson(args));
 
@@ -752,6 +803,24 @@ export class Agent {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const MAX_ECHOED_ARGS_CHARS = 400;
+
+/**
+ * Why a call's arguments were refused, in a form the model can act on. A
+ * string means the provider could not parse the model's JSON; zod alone
+ * would only say "expected object, received string".
+ */
+function argumentError(rawArgs: unknown, error: z.ZodError): string {
+  if (typeof rawArgs === 'string') {
+    return `the arguments were not valid JSON, so the call was not made. Send one JSON object. Received: ${truncate(rawArgs, MAX_ECHOED_ARGS_CHARS)}`;
+  }
+  return `invalid arguments, so the call was not made.\n${z.prettifyError(error)}\nYou sent: ${truncate(safeJson(rawArgs), MAX_ECHOED_ARGS_CHARS)}`;
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
 
 function failed(message: string): ToolOutcome {
   return { ok: false, output: `Error: ${message}`, error: message };

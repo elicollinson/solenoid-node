@@ -23,11 +23,22 @@ Research:
 - Search, then read the most relevant pages before answering. Cite the URLs you relied on.
 
 Charts and tables:
-- Use render_chart for numbers that read better as a picture. It draws the chart inline where you call it. Never draw charts by hand.
-- For tables or text that must be preserved exactly, call save_artifact and then embed_artifact where it belongs in your reply.
+- Use render_chart for numbers that read better as a picture. Never draw charts by hand.
+- For tables or text that must be preserved exactly, call save_artifact, then embed_artifact to show it.
+- Charts and embedded artifacts appear in the chat at the moment you call the tool, above the answer you write afterwards. Refer to them ("the chart above"). Never write tool calls, tool names or their arguments into your answer.
+- You cannot see what was drawn. If the person says a chart looks wrong, ask what they see or change one thing they named; do not redraw it again and again.
 
 Answers:
 - Lead with the answer. Keep it as short as the question allows, and use markdown where it helps.
 - If a tool you need is declined or unavailable, say plainly what you could not do.`;
 
 authoredText.offer('prompt:system', DEFAULT_SYSTEM_PROMPT);
+
+/**
+ * The prompt with today's date appended. Without it the model dates "this
+ * week" from its training data, a year or more out.
+ */
+export function withToday(prompt: string, now = new Date()): string {
+  // en-CA formats as YYYY-MM-DD, in local time.
+  return `${prompt}\n\nToday's date is ${now.toLocaleDateString('en-CA')}.`;
+}

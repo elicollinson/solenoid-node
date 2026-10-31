@@ -30,7 +30,7 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
-import { DEFAULT_SYSTEM_PROMPT } from './prompt.js';
+import { DEFAULT_SYSTEM_PROMPT, withToday } from './prompt.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
 const LMSTUDIO_PLACEHOLDER_KEY = 'lm-studio';
@@ -141,10 +141,11 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   const agent = new Agent({
     name: 'solenoid',
     routes,
-    systemPrompt: settings.agent.system_prompt ?? DEFAULT_SYSTEM_PROMPT,
+    systemPrompt: withToday(settings.agent.system_prompt ?? DEFAULT_SYSTEM_PROMPT),
     tools,
     think: settings.agent.think,
     timeoutMs: settings.agent.timeout_ms,
+    maxTurns: settings.agent.max_turns,
     screen,
     logger: agentLogger,
   });

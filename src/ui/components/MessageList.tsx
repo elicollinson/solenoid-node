@@ -90,20 +90,13 @@ function formatTableAsMarkdown(headers: string[], rows: string[][]): string {
   return `${headerRow}\n${separator}\n${dataRows}`;
 }
 
+/** The stored artifact an embed_artifact call names, drawn once the call completes. */
 function EmbedArtifactDisplay({ toolCall }: { toolCall: ToolCall }) {
   const artifactId = toolCall.args?.artifactId as string | undefined;
   if (!artifactId) {
     return (
       <Box paddingLeft={4} marginY={0}>
         <Text color="red">embed_artifact: missing artifactId</Text>
-      </Box>
-    );
-  }
-
-  if (toolCall.status === 'running') {
-    return (
-      <Box paddingLeft={4} marginY={0}>
-        <Text color="yellow">◐ Embedding artifact...</Text>
       </Box>
     );
   }
@@ -153,39 +146,29 @@ function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
     error: 'red',
   } as const;
 
-  // Render chart tool calls with special handling
-  if (isChartToolCall(toolCall.name)) {
-    if (toolCall.status === 'completed' && toolCall.args) {
-      return (
+  // Every call gets its status line, so each one is visible in the chat; a
+  // chart or an embedded artifact is drawn beneath its line once it completes.
+  const completed = toolCall.status === 'completed';
+  return (
+    <Box flexDirection="column">
+      <Box paddingLeft={4} marginY={0}>
+        <Text color={statusColors[toolCall.status]}>
+          {statusIcons[toolCall.status]} {toolCall.name}
+        </Text>
+        {toolCall.result && toolCall.status === 'error' && (
+          <Text color="red" dimColor>
+            {' '}
+            - {toolCall.result}
+          </Text>
+        )}
+      </Box>
+      {completed && isChartToolCall(toolCall.name) && toolCall.args && (
         <Box flexDirection="column" paddingLeft={2}>
           <ChartRenderer toolArgs={toolCall.args} />
         </Box>
-      );
-    }
-    if (toolCall.status === 'running') {
-      return (
-        <Box paddingLeft={4} marginY={0}>
-          <Text color="yellow">{statusIcons.running} Generating chart...</Text>
-        </Box>
-      );
-    }
-  }
-
-  // Render embedded artifacts inline
-  if (toolCall.name === 'embed_artifact') {
-    return <EmbedArtifactDisplay toolCall={toolCall} />;
-  }
-
-  return (
-    <Box paddingLeft={4} marginY={0}>
-      <Text color={statusColors[toolCall.status]}>
-        {statusIcons[toolCall.status]} {toolCall.name}
-      </Text>
-      {toolCall.result && toolCall.status === 'error' && (
-        <Text color="red" dimColor>
-          {' '}
-          - {toolCall.result}
-        </Text>
+      )}
+      {completed && toolCall.name === 'embed_artifact' && (
+        <EmbedArtifactDisplay toolCall={toolCall} />
       )}
     </Box>
   );

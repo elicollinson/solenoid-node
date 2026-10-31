@@ -141,6 +141,8 @@ function RenderLineGraph({ config }: { config: LineGraphConfig }) {
         <LineGraph
           data={data}
           height={config.height || 10}
+          // ink-chart's default draws one column per point: five points, five columns.
+          width={config.width || 60}
           showYAxis={config.showYAxis !== false}
           xLabels={config.xLabels}
           yDomain={config.yDomain || 'auto'}

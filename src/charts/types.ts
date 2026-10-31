@@ -67,6 +67,8 @@ export interface LineGraphConfig {
   title?: string;
   series: LineGraphSeries[];
   height?: number;
+  /** Columns. Without one, ink-chart draws one column per data point. */
+  width?: number;
   showYAxis?: boolean;
   xLabels?: string[];
   yDomain?: [number, number];

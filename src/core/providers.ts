@@ -318,6 +318,10 @@ export function isTransientProviderError(error: unknown): boolean {
     ['TimeoutError', 'APIConnectionError', 'APIConnectionTimeoutError'].includes(
       candidate?.name ?? ''
     ) ||
-    (candidate?.name === 'TypeError' && candidate?.message?.includes('fetch failed') === true)
+    // undici: "fetch failed" before a response, "terminated" when the server
+    // drops a stream part-way through.
+    (candidate?.name === 'TypeError' &&
+      (candidate?.message?.includes('fetch failed') === true ||
+        candidate?.message === 'terminated'))
   );
 }

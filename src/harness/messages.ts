@@ -49,5 +49,28 @@ export function describeRunError(error: unknown): string {
   if (error instanceof AgentTimeoutError) {
     return `Timed out after ${Math.round(error.timeoutMs / 1000)}s on every route.`;
   }
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === 'terminated') {
+    return 'The model server closed the connection mid-response. Check its log (LM Studio: Developer → Logs); a conversation longer than the loaded context length is a common cause.';
+  }
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === 'number' && status >= 500) {
+    return `The model server failed (HTTP ${status}: ${plainText(message.replace(/^\d{3}\s*/, ''))}). Check its log (LM Studio: Developer → Logs); a conversation longer than the loaded context length is a common cause.`;
+  }
+  return plainText(message);
+}
+
+const MAX_ERROR_CHARS = 300;
+
+/**
+ * An error body as one readable line. Servers answer some failures with an
+ * HTML page, which would otherwise be printed tag by tag.
+ */
+function plainText(message: string): string {
+  const text = message
+    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > MAX_ERROR_CHARS ? `${text.slice(0, MAX_ERROR_CHARS)}…` : text;
 }

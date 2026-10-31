@@ -113,6 +113,7 @@ routes:                    # tried in order
 agent:
   think: true              # true | false | low | medium | high
   timeout_ms: 300000       # per route attempt
+  max_turns: 25            # model calls per attempt; the last is offered no tools
   # system_prompt: ...     # replaces the built-in prompt
 
 screening:

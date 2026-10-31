@@ -4,7 +4,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type OpenAI from 'openai';
-import { type ChatDelta, OpenAICompatibleProvider } from '../../src/core/providers.js';
+import {
+  type ChatDelta,
+  OpenAICompatibleProvider,
+  isTransientProviderError,
+} from '../../src/core/providers.js';
 
 function fakeClient(chunks: unknown[]) {
   const requests: Record<string, unknown>[] = [];
@@ -152,5 +156,14 @@ describe('OpenAICompatibleProvider', () => {
 
     expect(lm.requests[0]).toMatchObject({ reasoning_effort: 'none' });
     expect(or.requests[0]).toMatchObject({ reasoning: { enabled: false } });
+  });
+});
+
+describe('isTransientProviderError', () => {
+  test('a stream the server dropped part-way is retried', () => {
+    expect(isTransientProviderError(new TypeError('terminated'))).toBe(true);
+    expect(isTransientProviderError(new TypeError('Cannot read properties of undefined'))).toBe(
+      false
+    );
   });
 });
