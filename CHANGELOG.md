@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.4](https://github.com/elicollinson/solenoid-node/compare/v1.0.3...v1.0.4) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* Session.send takes { onEvent } of AG-UI events and has no
+`approve` option; answer approval interrupts with session.resume().
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01BfdNJAW3RCPRGC3c5VWL6e
+
+### Features
+
+* **core:** display tools take an explicit done flag from the model ([7ae8f50](https://github.com/elicollinson/solenoid-node/commit/7ae8f503a8c59862fdabe3f6d918ca8de68bae0d))
+* speak AG-UI 1.0 to every UI, and make charts display components ([8d54ad8](https://github.com/elicollinson/solenoid-node/commit/8d54ad8317857d6a1adf96bb77c1aa87ffea5ef5))
+
 ### [1.0.3](https://github.com/elicollinson/solenoid-node/compare/v1.0.2...v1.0.3) (2026-10-31)
 
 
