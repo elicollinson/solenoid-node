@@ -136,7 +136,8 @@ export interface Harness {
   warnings: string[];
   /**
    * A new conversation. With `canSpawn`, its agent also holds the subagent
-   * tools and can start child sessions, which never can themselves.
+   * tools and can start child sessions, which never can themselves; a child
+   * that finishes unwatched starts a turn (Session.onAutoTurn).
    * `approve` replaces the approval interrupts (see SessionOptions).
    */
   createSession(options?: { canSpawn?: boolean; approve?: ApprovalHandler }): Session;
@@ -199,6 +200,7 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
           options
         ),
       summarize,
+      onFinished: () => session.notify(),
     });
     const agent = makeAgent(
       'solenoid',
@@ -207,6 +209,7 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     );
     const session: Session = new Session(agent, {
       approve,
+      background: manager,
       onClose: () => {
         manager.close();
         sessions.delete(session);

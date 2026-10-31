@@ -1,11 +1,12 @@
-import { EventType } from '@ag-ui/core';
+import { type AGUIEvent, EventType } from '@ag-ui/core';
 /**
  * Non-Interactive CLI Runner
  *
  * Executes a single prompt and writes the answer to stdout once the agent
  * has given it. Status and errors go to stderr, so stdout stays pipeable.
  * Nobody is present to answer an approval interrupt, so writes are declined
- * unless `--yes` was given.
+ * unless `--yes` was given. Subagents still running when the agent answers
+ * are waited for, and the turns their news starts write answers too.
  */
 import { loadSettings } from './config/index.js';
 import {
@@ -51,21 +52,32 @@ export async function runNonInteractive(
       canSpawn: true,
       approve: options.yes ? () => ({ allow: true }) : declineUnattended,
     });
-    const answer = await session.send(prompt, {
-      signal: controller.signal,
-      onEvent: (event) => {
-        const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
-        if (event.type === EventType.TOOL_CALL_START) {
-          process.stderr.write(`· ${event.toolCallName}\n`);
-        } else if (route) {
-          process.stderr.write(`${describeRouteAdvance(route)}\n`);
-        }
-      },
+    const onEvent = (event: AGUIEvent) => {
+      const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
+      if (event.type === EventType.TOOL_CALL_START) {
+        process.stderr.write(`· ${event.toolCallName}\n`);
+      } else if (route) {
+        process.stderr.write(`${describeRouteAdvance(route)}\n`);
+      }
+    };
+    // Each answer is its turn's final reply text; text written before a tool
+    // call ("Let me search for that") is narration and stays off stdout.
+    const write = (answer: string) => {
+      if (answer) process.stdout.write(`${answer}\n`);
+    };
+    // Stopping stops the subagents too, so nothing is left to wait for.
+    controller.signal.addEventListener('abort', () => session.close(), { once: true });
+    let failed = false;
+    session.onAutoTurn((turn) => {
+      process.stderr.write('· subagents finished\n');
+      turn({ signal: controller.signal, onEvent }).then(write, (error) => {
+        failed = true;
+        process.stderr.write(`Error: ${describeRunError(error)}\n`);
+      });
     });
-    // The answer is the final reply's text; text written before a tool call
-    // ("Let me search for that") is narration and stays off stdout.
-    if (answer) process.stdout.write(`${answer}\n`);
-    return 0;
+    write(await session.send(prompt, { signal: controller.signal, onEvent }));
+    await session.idle();
+    return failed ? 1 : 0;
   } catch (error) {
     process.stderr.write(`Error: ${describeRunError(error)}\n`);
     return 1;

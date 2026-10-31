@@ -13,6 +13,10 @@
  * Each user message is sent as operator text. A write that needs approval
  * ends the AG-UI run with an interrupt; `resume` answers it, and the turn
  * carries on in a new run.
+ *
+ * Turns run one at a time: a send while one is running waits its turn. A
+ * session with background work (its subagents) also starts turns itself,
+ * when that work has news the model has not seen: see `onAutoTurn`.
  */
 import type { AGUIEvent, Interrupt, Message, ResumeEntry } from '@ag-ui/core';
 import type { ToolVerdict } from '@elicollinson/solenoid-security';
@@ -57,7 +61,26 @@ export interface SessionOptions {
   approve?: ApprovalHandler;
   /** Called once by `close`, for whatever the session holds (its subagents). */
   onClose?: () => void;
+  /** Work running beside the conversation that the model should hear about. */
+  background?: Background;
 }
+
+/** Work a session runs beside the conversation: its subagents. */
+export interface Background {
+  /**
+   * News the model has not seen yet, taken once: a later call does not
+   * return it again. Undefined when there is none.
+   */
+  takeNews(): string | undefined;
+  /** Settles once no work is left that could make news. */
+  idle(): Promise<void>;
+}
+
+/**
+ * A turn the session starts itself, for its client to run as it runs
+ * `send`: with its own event handler and stop signal. Call it straight away.
+ */
+export type AutoTurn = (options: Omit<SendOptions, 'origin'>) => Promise<string>;
 
 /** An approval policy for a session nobody is attending: decline every write, saying so. */
 export function declineUnattended(request: ApprovalRequest): ToolVerdict {
@@ -84,6 +107,9 @@ export class Session {
   private readonly pending = new Map<string, (entry: ResumeEntry) => void>();
 
   private closed = false;
+  /** Settles when the turn running now ends; undefined while none is. */
+  private running: Promise<void> | undefined;
+  private autoTurn: ((turn: AutoTurn) => void) | undefined;
 
   constructor(
     private readonly agent: Agent,
@@ -97,6 +123,41 @@ export class Session {
     this.options.onClose?.();
   }
 
+  /**
+   * Run turns the session starts itself: when its background work has news
+   * and no turn is running, `handler` is called with the turn to run.
+   * Without a handler, news waits for the model to ask (the subagent tools).
+   */
+  onAutoTurn(handler: (turn: AutoTurn) => void): void {
+    this.autoTurn = handler;
+    this.notify();
+  }
+
+  /**
+   * Background work has news: start a turn for it, unless one is running,
+   * whose end looks again.
+   */
+  notify(): void {
+    if (this.closed || this.running || !this.autoTurn) return;
+    const news = this.options.background?.takeNews();
+    if (!news) return;
+    this.autoTurn((options) => this.run(news, 'news', { ...options, origin: 'agent' }));
+  }
+
+  /**
+   * Settles once the session has nothing left to do: no turn running, no
+   * background work, and no news waiting for a turn.
+   */
+  async idle(): Promise<void> {
+    for (;;) {
+      await this.running;
+      await this.options.background?.idle();
+      // After the timer a finished turn sets to look for news (see run).
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!this.running) return;
+    }
+  }
+
   /** The AG-UI thread so far. */
   get messages(): readonly Message[] {
     return this.thread;
@@ -107,7 +168,36 @@ export class Session {
    * interrupts in between; rejects with the error that ended it, after the
    * stream has reported it (RUN_ERROR, or a cancelled RUN_FINISHED).
    */
-  async send(text: string, { onEvent, signal, origin = 'operator' }: SendOptions): Promise<string> {
+  send(text: string, options: SendOptions): Promise<string> {
+    return this.run(text, 'person', options);
+  }
+
+  private async run(
+    text: string,
+    from: 'person' | 'news',
+    { onEvent, signal, origin = 'operator' }: SendOptions
+  ): Promise<string> {
+    // Not awaited when idle, so the first turn still starts synchronously.
+    while (this.running) await this.running;
+    let ended!: () => void;
+    this.running = new Promise((resolve) => {
+      ended = resolve;
+    });
+    try {
+      return await this.turn(text, from, { onEvent, signal, origin });
+    } finally {
+      this.running = undefined;
+      ended();
+      // After the client has handled the end of this turn.
+      setTimeout(() => this.notify(), 0);
+    }
+  }
+
+  private async turn(
+    text: string,
+    from: 'person' | 'news',
+    { onEvent, signal, origin }: SendOptions
+  ): Promise<string> {
     const user: ChatMessage = { role: 'user', content: text, origin };
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
@@ -119,7 +209,11 @@ export class Session {
 
     // Synchronous up to the agent's first await, so a client draws the
     // person's message the moment it calls send.
-    encoder.startTurn({ id: crypto.randomUUID(), text });
+    encoder.startTurn({
+      id: crypto.randomUUID(),
+      text,
+      role: from === 'person' ? 'user' : 'developer',
+    });
     try {
       const result = await this.agent.runMessages([...this.transcript, user], {
         signal,

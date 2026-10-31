@@ -58,4 +58,22 @@ describe('threadBubbles', () => {
     );
     expect(bubbles.map((b) => b.key)).toEqual(['n0', 'u1', 'a1', 'n1']);
   });
+
+  test('a developer message opens its own reply, drawn as its first line', () => {
+    const bubbles = threadBubbles(
+      [
+        ...thread,
+        { id: 'd1', role: 'developer', content: 'Subagents finished: r (sa-1) done.\n\nDetails' },
+        { id: 'a2', role: 'assistant', content: 'It is 42.' },
+      ],
+      [],
+      idle
+    );
+    expect(bubbles.map((b) => b.role)).toEqual(['user', 'assistant', 'system', 'assistant']);
+    expect(bubbles[2]).toEqual({
+      role: 'system',
+      key: 'd1',
+      text: 'Subagents finished: r (sa-1) done.',
+    });
+  });
 });

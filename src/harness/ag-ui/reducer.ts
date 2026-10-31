@@ -102,14 +102,17 @@ export function applyEvent(thread: readonly Message[], event: AGUIEvent): Messag
     case EventType.TEXT_MESSAGE_START:
       return upsert(thread, event.messageId, (existing) => {
         if (existing) return existing;
-        return event.role === 'user'
-          ? { id: event.messageId, role: 'user', content: '' }
-          : { id: event.messageId, role: 'assistant', content: '' };
+        const id = event.messageId;
+        if (event.role === 'user') return { id, role: 'user', content: '' };
+        if (event.role === 'developer') return { id, role: 'developer', content: '' };
+        return { id, role: 'assistant', content: '' };
       });
 
     case EventType.TEXT_MESSAGE_CONTENT:
       return update(thread, event.messageId, (m) =>
-        m.role === 'assistant' || (m.role === 'user' && typeof m.content === 'string')
+        m.role === 'assistant' ||
+        m.role === 'developer' ||
+        (m.role === 'user' && typeof m.content === 'string')
           ? { ...m, content: (m.content ?? '') + event.delta }
           : m
       );

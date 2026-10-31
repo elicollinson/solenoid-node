@@ -5,8 +5,8 @@ import { describe, expect, test } from 'bun:test';
 import { type AGUIEvent, EventType } from '@ag-ui/core';
 import { z } from 'zod';
 import { Agent, defineTool } from '../../src/core/index.js';
-import { renderChartTool } from '../../src/tools/index.js';
 import { APPROVAL_REASON, Session, applyEvent } from '../../src/harness/index.js';
+import { renderChartTool } from '../../src/tools/index.js';
 import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
 
 function writeTool(log: string[]) {
@@ -203,7 +203,9 @@ describe('Session (AG-UI)', () => {
       new Agent({ routes: [{ client: provider, model: 'm' }], tools: [slow] })
     );
 
-    await expect(session.send('go', { signal: controller.signal, onEvent: () => {} })).rejects.toThrow();
+    await expect(
+      session.send('go', { signal: controller.signal, onEvent: () => {} })
+    ).rejects.toThrow();
     const result = session.messages.find((m) => m.role === 'tool');
     expect(result).toMatchObject({ toolCallId: 's1', error: 'not run' });
   });
@@ -226,5 +228,23 @@ describe('Session (AG-UI)', () => {
       type: EventType.RUN_FINISHED,
       outcome: { type: 'cancelled' },
     });
+  });
+
+  test('a send while a turn runs waits for it to end', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider = new ScriptedProvider('fake', [
+      () => gate.then(() => say('first')) as never,
+      say('second'),
+    ]);
+    const session = new Session(new Agent({ routes: [{ client: provider, model: 'm' }] }));
+    const first = session.send('one', { onEvent: () => {} });
+    const second = session.send('two', { onEvent: () => {} });
+    release();
+    expect(await Promise.all([first, second])).toEqual(['first', 'second']);
+    // The second turn began after the first ended: its model call saw the first reply.
+    expect(provider.calls[1]?.map((m) => m.content)).toEqual(['one', 'first', 'two']);
   });
 });

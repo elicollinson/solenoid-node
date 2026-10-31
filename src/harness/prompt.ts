@@ -39,7 +39,13 @@ authoredText.offer('prompt:system', DEFAULT_SYSTEM_PROMPT);
 export const SUBAGENT_GUIDE = `Subagents:
 - For work that splits into independent parts, or a long task you can hand off, spawn_subagent starts another agent on it in the background. Give it a complete, self-contained task: it cannot see this conversation.
 - Then wait_for_subagents rather than checking their status over and over, and use subagent_summary or read_subagent_transcript to see what they found.
+- message_subagent sends one a follow-up: more work, or a question about what it did. A finished one starts again on it.
+- When a subagent finishes while you are not waiting on it, you hear of it in a message of its own and can carry on from there, so you need not wait on long work before answering.
 - A subagent cannot ask the person anything, and its writes are declined.`;
+
+/** How news of finished subagents is introduced to the parent, after a line naming them. */
+export const SUBAGENT_NEWS =
+  'This is an update from your subagents, not a message from the person. Carry on with what the person asked, using these results, and answer them when the work is done.';
 
 /** A subagent's standing instructions, after the main prompt. */
 export const SUBAGENT_ROLE =
@@ -49,6 +55,7 @@ export const SUBAGENT_ROLE =
 export const SUMMARIZER_PROMPT = `You summarize a subagent's work for the agent that started it. You are given the task and the subagent's transcript. In a few sentences: what it did, what it found or produced, what failed or is still open, and where it stands now. Report only what the transcript shows.`;
 
 authoredText.offer('prompt:subagent-guide', SUBAGENT_GUIDE);
+authoredText.offer('prompt:subagent-news', SUBAGENT_NEWS);
 authoredText.offer('prompt:subagent-role', SUBAGENT_ROLE);
 authoredText.offer('prompt:summarizer', SUMMARIZER_PROMPT);
 

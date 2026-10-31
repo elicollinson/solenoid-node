@@ -4,7 +4,9 @@
  * Groups the AG-UI thread into what MessageList draws: each person's
  * message, then everything the agent produced until the next one as one
  * reply of items (text, a status line per tool call, display components).
- * Notices the app posts sit where in the thread they were posted.
+ * Notices the app posts sit where in the thread they were posted. A
+ * developer message opens a turn the harness started (a subagent finished):
+ * it is drawn as a system line, its first, and the reply follows it.
  *
  * Pure, and derived on every render: the items hold the thread's own
  * message objects, which the reducer keeps for every message an event did
@@ -76,7 +78,11 @@ export function threadBubbles(
     if (message.role === 'user') {
       flushReply();
       bubbles.push({ role: 'user', key: message.id, text: contentToText(message.content) });
-    } else if (message.role !== 'system' && message.role !== 'developer') {
+    } else if (message.role === 'developer') {
+      flushReply();
+      const [heading = ''] = message.content.split('\n', 1);
+      bubbles.push({ role: 'system', key: message.id, text: heading });
+    } else if (message.role !== 'system') {
       reply.push(message);
     }
   });

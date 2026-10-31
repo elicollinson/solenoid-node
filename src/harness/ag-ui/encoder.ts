@@ -88,12 +88,17 @@ export class TurnEncoder {
     private readonly sink: EncoderSink
   ) {}
 
-  /** Open the turn's first run with the person's message in it. */
-  startTurn(user: { id: string; text: string }): void {
+  /**
+   * Open the turn's first run with the message that starts it: the person's,
+   * or a `developer` message for a turn the harness starts itself (news of
+   * a subagent that finished).
+   */
+  startTurn(opening: { id: string; text: string; role: 'user' | 'developer' }): void {
+    const messageId = opening.id;
     this.startRun();
-    this.emit({ type: EventType.TEXT_MESSAGE_START, messageId: user.id, role: 'user' });
-    this.emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: user.id, delta: user.text });
-    this.emit({ type: EventType.TEXT_MESSAGE_END, messageId: user.id });
+    this.emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: opening.role });
+    this.emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: opening.text });
+    this.emit({ type: EventType.TEXT_MESSAGE_END, messageId });
     this.turnStart = this.sink.thread().length;
   }
 

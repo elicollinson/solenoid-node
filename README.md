@@ -114,9 +114,12 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 | `subagent_summary(id)` | A model-written summary of its work, reused until its transcript grows |
 | `read_subagent_transcript(id, from, count)` | A page of its transcript in detail |
 | `wait_for_subagents(ids?, mode, timeoutSeconds)` | Blocks until all (or any) finish; waiting does not spend the parent's deadline |
+| `message_subagent(id, message)` | A follow-up: a running one reads it when its current turn ends, a finished one starts again on it |
 | `cancel_subagent(id)` | Stops one |
 
 Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model serves one request at a time. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended and listed in its status.
+
+A subagent that finishes while the parent's model is not watching it (through `wait_for_subagents`, `subagent_status` and the rest) is news. The session starts a turn of its own for it as soon as no turn is running, so the parent can answer first and report back later. That turn opens with an AG-UI `developer` message rather than a user one, which the terminal UI draws as a system line, and the news goes to the model as `agent` text. A client opts in with `session.onAutoTurn(turn => ...)` and runs the turn as it runs `send`. Without a handler, news waits until the model asks. Turns never overlap: a `send` made while one is running waits for it. The one-shot CLI waits on `session.idle()` before it exits, so it writes the answers of these turns too.
 
 ### Screening
 
