@@ -6,15 +6,17 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "bin": {
-    "solenoid": "./src/cli.ts"
+    "solenoid": "./dist/cli.js"
   },
   "files": [
+    "dist",
     "src"
   ],
   "scripts": {
     "dev": "bun run --watch src/cli.ts",
     "start": "bun run src/cli.ts",
     "build": "bun run scripts/build.ts",
+    "prepublishOnly": "bun run build",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:coverage": "bun test --coverage",
