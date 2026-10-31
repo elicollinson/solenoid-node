@@ -52,6 +52,7 @@ describe('Session (AG-UI)', () => {
     const chartArgs = {
       chartType: 'bar',
       barData: JSON.stringify([{ label: 'A', value: 1 }]),
+      done: true,
     };
     const provider = new ScriptedProvider('fake', [
       {

@@ -56,6 +56,7 @@ import {
   type ApprovalHandler,
   type FunctionToolDefinition,
   reachesWorld,
+  saysDone,
   toJsonSchema,
 } from './tools.js';
 import {
@@ -76,6 +77,9 @@ export const DEFAULT_MAX_TURNS = 25;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
 /** What the model is told after a display tool's content reached the person. */
 const DISPLAY_NOTICE = 'Shown to the person in the chat.';
+/** What the model is told when it asks to show exactly what it already showed. */
+const ALREADY_SHOWN_NOTICE =
+  'Already shown to the person, unchanged, so it was not drawn again. Do not repeat it.';
 /** What the model is told in place of a quarantined tool output. */
 const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; output blocked.';
 
@@ -152,6 +156,8 @@ interface Attempt {
   schema?: z.ZodType;
   /** Set once a write tool has run. A committed attempt is never replayed. */
   committed: boolean;
+  /** Display content already shown this attempt, so an identical call is not drawn twice. */
+  shown: Set<string>;
 }
 
 export class Agent {
@@ -304,6 +310,7 @@ export class Agent {
             approve: options.approve,
             schema: options.schema,
             committed: false,
+            shown: new Set(),
           };
           // Each attempt works on its own copy, so a failed trajectory never
           // leaks into the next route's replay.
@@ -518,16 +525,18 @@ export class Agent {
         });
         if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
 
-        // A turn that answered and only displayed things is the answer: the
-        // model would read back nothing but "shown", and asked to go on it
-        // redraws and rewrites what it already said.
-        const answered = msg.content.trim();
-        const onlyShown = msg.toolCalls.every(
-          (call, i) => this.tools.get(call.name)?.kind === 'display' && results[i]!.ok
+        // The model ends its reply with a display call by saying so; the
+        // loop does not guess (see DONE_FLAG).
+        const done = msg.toolCalls.some(
+          (call, i) =>
+            this.tools.get(call.name)?.kind === 'display' &&
+            results[i]!.ok &&
+            saysDone(call.arguments)
         );
-        if (answered && onlyShown && !schema) {
-          const feedback = await this.reviewFeedback(messages, answered, attempt);
-          if (!feedback) return answered;
+        if (done && !schema) {
+          const answer = msg.content.trim();
+          const feedback = await this.reviewFeedback(messages, answer, attempt);
+          if (!feedback) return answer;
           messages.push({ role: 'system', content: feedback });
         }
         continue;
@@ -709,6 +718,11 @@ export class Agent {
             if (!result || typeof result !== 'object' || Array.isArray(result)) {
               throw new Error('a display tool must return an object of component content');
             }
+            // Showing the same thing twice is never wanted. This is about the
+            // content, not about when the reply ends: that is the model's call.
+            const key = `${tool.component}:${safeJson(result)}`;
+            if (attempt.shown.has(key)) return { ok: true, output: ALREADY_SHOWN_NOTICE };
+            attempt.shown.add(key);
             attempt.emit({
               type: 'display',
               id,

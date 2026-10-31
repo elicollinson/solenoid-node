@@ -525,11 +525,11 @@ describe('Display tools', () => {
     execute: ({ label }) => ({ label }),
   });
 
-  test('a turn that answers and displays ends the run', async () => {
+  test('a display call that says it is done ends the run with that turn', async () => {
     const turn: ChatMessage = {
       role: 'assistant',
       content: 'Here it is.',
-      toolCalls: [{ id: 'd1', name: 'show_thing', arguments: { label: 'x' } }],
+      toolCalls: [{ id: 'd1', name: 'show_thing', arguments: { label: 'x', done: true } }],
     };
     const provider = new ScriptedProvider('fake', [turn]);
     const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
@@ -548,12 +548,64 @@ describe('Display tools', () => {
       component: 'test.thing',
       content: { label: 'x' },
     });
-    expect(result.messages.at(-1)).toMatchObject({ role: 'tool', content: 'Shown to the person in the chat.' });
+    expect(result.messages.at(-1)).toMatchObject({
+      role: 'tool',
+      content: 'Shown to the person in the chat.',
+    });
+  });
+
+  test('a display call that is not done lets the model go on to the next', async () => {
+    const provider = new ScriptedProvider('fake', [
+      {
+        role: 'assistant',
+        content: 'First, a bar chart.',
+        toolCalls: [{ id: 'd1', name: 'show_thing', arguments: { label: 'a', done: false } }],
+      },
+      {
+        role: 'assistant',
+        content: 'And a line chart.',
+        toolCalls: [{ id: 'd2', name: 'show_thing', arguments: { label: 'b', done: true } }],
+      },
+    ]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
+    const shown: unknown[] = [];
+
+    const output = await agent.run('go', {
+      onEvent: (e) => e.type === 'display' && shown.push(e.content),
+    });
+
+    expect(output).toBe('And a line chart.');
+    expect(shown).toEqual([{ label: 'a' }, { label: 'b' }]);
+  });
+
+  test('identical content is shown once per run', async () => {
+    const same = { label: 'a', done: false };
+    const provider = new ScriptedProvider('fake', [
+      { role: 'assistant', content: 'A chart.', toolCalls: [{ id: 'd1', name: 'show_thing', arguments: same }] },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'd2', name: 'show_thing', arguments: same }] },
+      say('Done.'),
+    ]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
+    let shown = 0;
+
+    await agent.run('go', { onEvent: (e) => e.type === 'display' && shown++ });
+
+    expect(shown).toBe(1);
+    expect(provider.calls[2]!.at(-1)?.content).toContain('Already shown');
+  });
+
+  test('every display tool requires the done flag', () => {
+    const parameters = chart.definition.function.parameters as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(parameters.properties.done).toMatchObject({ type: 'boolean' });
+    expect(parameters.required).toContain('done');
   });
 
   test('a display with no answer yet lets the model write one', async () => {
     const provider = new ScriptedProvider('fake', [
-      call('show_thing', { label: 'x' }),
+      call('show_thing', { label: 'x', done: false }),
       say('That chart shows x.'),
     ]);
     const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });

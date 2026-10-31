@@ -16,7 +16,7 @@ import { parseChartArgs } from '../display/index.js';
 
 export const renderChartTool = defineTool({
   name: 'render_chart',
-  description: `Show the person a chart in the chat. Use it whenever numbers are easier to read as a picture; never draw ASCII charts by hand. Call it once per chart, alongside your answer.
+  description: `Show the person a chart in the chat. Use it whenever numbers are easier to read as a picture; never draw ASCII charts by hand. Draw each chart once; set done to true on the one that completes your answer.
 
 Chart types:
 - bar: compare values across categories. barData: '[{"label":"Q1","value":100,"color":"green"}]'
