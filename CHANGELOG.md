@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.2](https://github.com/elicollinson/solenoid-node/compare/v1.0.1...v1.0.2) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* models, agent_prompts, ollama_host and embeddings settings
+are no longer read; configure providers and routes instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01BfdNJAW3RCPRGC3c5VWL6e
+
+### Features
+
+* **core:** add framework-free agent loop ported from Solenoid-Assistant ([ca93e57](https://github.com/elicollinson/solenoid-node/commit/ca93e57d28092978bd5d578613c76422dbefc5bb))
+* **core:** let a tool declare its output origin; skip screening agent text ([9b3519e](https://github.com/elicollinson/solenoid-node/commit/9b3519e214bf2d79ca23702c7ce6d217093d7844))
+* replace the ADK multi-agent hierarchy with a single-agent harness ([becccb9](https://github.com/elicollinson/solenoid-node/commit/becccb996513520b0ead27aa0b83246aacd2abb3)), closes [#3](https://github.com/elicollinson/solenoid-node/issues/3)
+
+
+### Bug Fixes
+
+* **core:** screen only untrusted text, not the model's own turns ([2a877e8](https://github.com/elicollinson/solenoid-node/commit/2a877e8788829a17898475b64edffada8a82f328))
+* **tools:** stop render_chart replies from drawing the chart twice ([e8e7e86](https://github.com/elicollinson/solenoid-node/commit/e8e7e86af4758814f3ef6ca2d1527ec33ad4fcad))
+
 ### 1.0.1 (2026-05-24)
 
 
