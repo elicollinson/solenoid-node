@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.3](https://github.com/elicollinson/solenoid-node/compare/v1.0.2...v1.0.3) (2026-10-31)
+
+
+### Bug Fixes
+
+* chart, tool-error and turn-limit problems found in local testing ([3362543](https://github.com/elicollinson/solenoid-node/commit/3362543e065045b15bf56fa3887b0ab6c26e61fa))
+
 ### [1.0.2](https://github.com/elicollinson/solenoid-node/compare/v1.0.1...v1.0.2) (2026-10-31)
 
 
