@@ -56,7 +56,6 @@ import {
   type ApprovalHandler,
   type FunctionToolDefinition,
   reachesWorld,
-  saysDone,
   toJsonSchema,
 } from './tools.js';
 import {
@@ -525,14 +524,11 @@ export class Agent {
         });
         if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
 
-        // The model ends its reply with a display call by saying so; the
-        // loop does not guess (see DONE_FLAG).
-        const done = msg.toolCalls.some(
-          (call, i) =>
-            this.tools.get(call.name)?.kind === 'display' &&
-            results[i]!.ok &&
-            saysDone(call.arguments)
-        );
+        // A display call's `done` ends the reply, but only when the turn
+        // holds nothing else: a read's result is still the model's to read.
+        const done =
+          msg.toolCalls.every((call) => this.tools.get(call.name)?.kind === 'display') &&
+          results.some((r) => r.done);
         if (done && !schema) {
           const answer = msg.content.trim();
           const feedback = await this.reviewFeedback(messages, answer, attempt);
@@ -710,7 +706,11 @@ export class Agent {
 
           if (tool.kind === 'write') attempt.committed = true;
           const result = await awaitWithSignal(
-            Promise.resolve(tool.execute(args, { signal: attempt.signal })),
+            Promise.resolve(
+              tool.execute(tool.kind === 'display' ? withoutDone(args) : args, {
+                signal: attempt.signal,
+              })
+            ),
             attempt.signal
           );
           if (tool.kind === 'display') {
@@ -718,10 +718,11 @@ export class Agent {
             if (!result || typeof result !== 'object' || Array.isArray(result)) {
               throw new Error('a display tool must return an object of component content');
             }
-            // Showing the same thing twice is never wanted. This is about the
-            // content, not about when the reply ends: that is the model's call.
-            const key = `${tool.component}:${safeJson(result)}`;
-            if (attempt.shown.has(key)) return { ok: true, output: ALREADY_SHOWN_NOTICE };
+            const done = (parsed.data as { done?: boolean }).done === true;
+            // Showing the same thing twice is never wanted.
+            const json = safeJson(result);
+            const key = `${tool.component}:${json}`;
+            if (attempt.shown.has(key)) return { ok: true, output: ALREADY_SHOWN_NOTICE, done };
             attempt.shown.add(key);
             attempt.emit({
               type: 'display',
@@ -730,8 +731,8 @@ export class Agent {
               component: tool.component!,
               content: result as Record<string, unknown>,
             });
-            span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(result));
-            return { ok: true, output: DISPLAY_NOTICE };
+            span.setAttribute(SemanticConventions.OUTPUT_VALUE, json);
+            return { ok: true, output: DISPLAY_NOTICE, done };
           }
           const output = typeof result === 'string' ? result : JSON.stringify(result);
           // An internal tool's output is the model's own text. The screen
@@ -868,6 +869,12 @@ function argumentError(rawArgs: unknown, error: z.ZodError): string {
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** A display call's arguments as its tool defined them, without the loop's `done`. */
+function withoutDone(args: unknown): unknown {
+  const { done: _done, ...rest } = args as Record<string, unknown>;
+  return rest;
 }
 
 function failed(message: string): ToolOutcome {

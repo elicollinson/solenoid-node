@@ -41,8 +41,8 @@ export interface FunctionToolDefinition {
  * - `display`: an internal tool whose result is for the person, not the
  *   model, such as a chart. What `execute` returns is the content of the
  *   tool's `component`, reported as a `display` event; the model is told
- *   only that it was shown. Every display call carries the model's own
- *   `done` flag (see DONE_FLAG): true ends the run with that turn's text.
+ *   only that it was shown. Every display call also takes a required
+ *   `done`: the model's own word that the call completes its answer.
  *
  * `internal` and `display` must be claimed, and only when no byte of the
  * output comes from anywhere else. MCP tools are never either. Anything but a
@@ -73,37 +73,12 @@ export interface ApprovalRequest extends ToolRequest {
 /** Allowed, or refused with the sentence the model is given. */
 export type ApprovalHandler = (request: ApprovalRequest) => ToolVerdict | Promise<ToolVerdict>;
 
-/**
- * The argument every display tool takes besides its own: the model's
- * explicit statement that this call completes its answer. A display tool's
- * result says nothing new to the model, so without it the loop could only
- * guess whether to ask for another turn, and guessed wrong both ways: a
- * model asked to go on redrew what it had shown, and one stopped early lost
- * the rest of a multi-step answer.
- */
-export const DONE_FLAG = 'done';
-
-const DONE_PARAMETER = {
-  type: 'boolean',
-  description:
-    'true if this completes your answer: your reply ends with this turn. false if you have more to show or say.',
-};
-
-/** A display tool's parameters with the done flag added, and required. */
-function withDoneFlag(parameters: Record<string, unknown>): Record<string, unknown> {
-  const properties = (parameters.properties as Record<string, unknown> | undefined) ?? {};
-  const required = (parameters.required as string[] | undefined) ?? [];
-  return {
-    ...parameters,
-    properties: { ...properties, [DONE_FLAG]: DONE_PARAMETER },
-    required: [...required, DONE_FLAG],
-  };
-}
-
-/** Whether a display call said it completes the answer. */
-export function saysDone(args: unknown): boolean {
-  return (args as Record<string, unknown> | null)?.[DONE_FLAG] === true;
-}
+/** The argument by which a display call says it completes the answer. */
+const DONE = z
+  .boolean()
+  .describe(
+    'true if this completes your answer: your reply ends with this turn, so write the text of your answer in this same turn. false if you have more to show or say.'
+  );
 
 export interface ToolContext {
   signal?: AbortSignal;
@@ -140,20 +115,23 @@ export function defineTool<S extends z.ZodType>(config: {
   // ../mcp/manager.ts precisely because a remote server's description is that
   // server's text, not ours. Never route interpolated text through here.
   authoredText.offer(`tool:${config.name}`, config.description);
+  // A display tool's schema gains `done`; the loop takes it off the
+  // arguments before `execute` sees them.
+  const schema =
+    config.kind === 'display'
+      ? (config.schema as unknown as z.ZodObject).extend({ done: DONE })
+      : config.schema;
   return {
     kind: config.kind,
     ...(config.component ? { component: config.component } : {}),
-    schema: config.schema,
+    schema: schema as S,
     execute: config.execute,
     definition: {
       type: 'function',
       function: {
         name: config.name,
         description: config.description,
-        parameters:
-          config.kind === 'display'
-            ? withDoneFlag(toJsonSchema(config.schema))
-            : toJsonSchema(config.schema),
+        parameters: toJsonSchema(schema),
       },
     },
   };

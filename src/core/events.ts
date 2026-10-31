@@ -27,6 +27,8 @@ export interface ToolOutcome {
   quarantined?: boolean;
   /** No call was made: the approval handler refused it. */
   declined?: boolean;
+  /** A display call the model said completes its answer. */
+  done?: boolean;
 }
 
 export interface RouteRef {

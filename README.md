@@ -97,7 +97,7 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 
 - **Errors are turns.** A failed or invalid tool call is reported back to the model so it can correct itself.
 - **Reads run together.** The read tools of one turn, and their screens, run concurrently. A write waits for the calls before it.
-- **Display tools are for the person.** A `display` tool (`render_chart`) sends its content to the UI and tells the model only that it was shown. Every display call carries a required `done` flag: the model says when a chart completes its answer, and the run ends with that turn. The loop never guesses. Content identical to something already shown in the run is not drawn twice.
+- **Display tools are for the person.** A `display` tool (`render_chart`) sends its content to the UI and tells the model only that it was shown. Every display call carries a required `done` flag: the model says when a chart completes its answer, and a turn of display calls that says so ends the run. Content identical to something already shown in the run is not drawn twice.
 - **A turn limit.** `agent.max_turns` (default 25) bounds model calls per attempt; the last is offered no tools.
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.

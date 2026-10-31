@@ -594,6 +594,41 @@ describe('Display tools', () => {
     expect(provider.calls[2]!.at(-1)?.content).toContain('Already shown');
   });
 
+  test('a display call without done is refused with an error the model can fix', async () => {
+    const provider = new ScriptedProvider('fake', [
+      call('show_thing', { label: 'x' }),
+      {
+        role: 'assistant',
+        content: 'Fixed.',
+        toolCalls: [{ id: 'd2', name: 'show_thing', arguments: { label: 'x', done: true } }],
+      },
+    ]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
+
+    expect(await agent.run('go')).toBe('Fixed.');
+    expect(provider.calls[1]!.find((m) => m.role === 'tool')?.content).toContain('done');
+  });
+
+  test('done does not end a turn that also read something', async () => {
+    const provider = new ScriptedProvider('fake', [
+      {
+        role: 'assistant',
+        content: 'Chart, and a lookup.',
+        toolCalls: [
+          { id: 'd1', name: 'show_thing', arguments: { label: 'x', done: true } },
+          { id: 'e1', name: 'echo', arguments: { text: 'more' } },
+        ],
+      },
+      say('With the lookup: more.'),
+    ]);
+    const agent = new Agent({
+      routes: [{ client: provider, model: 'm' }],
+      tools: [chart, echoTool],
+    });
+
+    expect(await agent.run('go')).toBe('With the lookup: more.');
+  });
+
   test('every display tool requires the done flag', () => {
     const parameters = chart.definition.function.parameters as {
       properties: Record<string, unknown>;
@@ -623,7 +658,7 @@ describe('Display tools', () => {
       schema: z.object({}),
       execute: () => 'not an object',
     });
-    const provider = new ScriptedProvider('fake', [call('show_broken', {}), say('sorry')]);
+    const provider = new ScriptedProvider('fake', [call('show_broken', { done: true }), say('sorry')]);
     const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [broken] });
 
     expect(await agent.run('go')).toBe('sorry');
