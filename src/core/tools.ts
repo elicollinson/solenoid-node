@@ -7,7 +7,12 @@
  *
  * Ported from Solenoid-Assistant src/core/tools.ts.
  */
-import { type ToolKind, authoredText } from '@elicollinson/solenoid-security';
+import {
+  type ToolKind,
+  type ToolRequest,
+  type ToolVerdict,
+  authoredText,
+} from '@elicollinson/solenoid-security';
 import { z } from 'zod';
 
 export interface FunctionToolDefinition {
@@ -26,7 +31,7 @@ export interface FunctionToolDefinition {
  *   world. A read observes it and cannot change anything a later read would
  *   see; a write changes it. Both return text from outside this process, so
  *   their output is screened before the model reads it. A write asks first
- *   (see `ApprovalHandler` in ./agent.ts) and, once run, keeps a failed
+ *   (see `ApprovalHandler` below) and, once run, keeps a failed
  *   attempt from being replayed on another route. When it is genuinely
  *   arguable whether a tool changes anything, it is a write.
  * - `internal`: the tool touches only this process. It returns what the model
@@ -48,6 +53,18 @@ export type AgentToolKind = ToolKind | 'internal';
 export function reachesWorld(kind: AgentToolKind): kind is ToolKind {
   return kind !== 'internal';
 }
+
+/**
+ * solenoid-security's tool request, plus the run's signal. `args` are
+ * validated: a call that fails its schema is refused before anybody is asked.
+ */
+export interface ApprovalRequest extends ToolRequest {
+  /** The run's signal. An approval outlives no run. */
+  signal: AbortSignal;
+}
+
+/** Allowed, or refused with the sentence the model is given. */
+export type ApprovalHandler = (request: ApprovalRequest) => ToolVerdict | Promise<ToolVerdict>;
 
 export interface ToolContext {
   signal?: AbortSignal;

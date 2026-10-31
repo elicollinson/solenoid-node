@@ -25,20 +25,35 @@
  */
 import {
   type ScreeningResult,
-  type ScreeningBoundary as SecurityScreeningBoundary,
   type TextInput,
   type TextOrigin,
-  type ToolRequest,
-  type ToolVerdict,
   currentToolGate,
 } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
-import { AgentAbortedError, abortReason } from './abort.js';
-import type { ChatMessage, ChatProvider, ThinkLevel, TokenUsage, ToolCall } from './providers.js';
+import {
+  AgentAbortedError,
+  AgentRunError,
+  AgentTimeoutError,
+  PromptInjectionDetectedError,
+  PromptInjectionScreeningError,
+  type ScreeningBoundary,
+  isScreeningFailure,
+} from './errors.js';
+import type { AgentEvent, ToolOutcome } from './events.js';
+import {
+  type ChatMessage,
+  type ChatProvider,
+  type ModelRouteChain,
+  type ThinkLevel,
+  type ToolCall,
+  isTransientProviderError,
+} from './providers.js';
 import type { Reviewer } from './reviewer.js';
+import { abortReason, awaitWithSignal, waitFor } from './signals.js';
+import { extractJson, validateStructured } from './structured.js';
 import {
   type AgentTool,
-  type AgentToolKind,
+  type ApprovalHandler,
   type FunctionToolDefinition,
   reachesWorld,
   toJsonSchema,
@@ -59,112 +74,8 @@ const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; outp
 /** Consecutive transient failures of one model call before the attempt fails. */
 const MAX_TRANSIENT_RETRIES = 4;
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-export class AgentTimeoutError extends Error {
-  readonly code = 'AGENT_TIMEOUT';
-
-  constructor(readonly timeoutMs: number) {
-    super(`Agent run timed out after ${timeoutMs}ms`);
-    this.name = 'AgentTimeoutError';
-  }
-}
-
-export { AgentAbortedError };
-
-export class AgentRunError extends Error {
-  readonly code = 'AGENT_RUN_FAILED';
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'AgentRunError';
-  }
-}
-
-/**
- * Where untrusted text enters the loop: the messages a run starts from, and
- * the result of every tool that reaches the world (see `reachesWorld` in
- * ./tools.ts). The model's own turns are not screened. They are not
- * untrusted text, and against the Gemma judge an ordinary planning turn
- * ("I should read that URL") was flagged often enough to stop a quarter of
- * everyday runs. Injected text is caught where it arrives, before the model
- * reads it.
- */
-export type ScreeningBoundary = Extract<SecurityScreeningBoundary, 'input' | 'tool_output'>;
-
-export class PromptInjectionDetectedError extends Error {
-  readonly code = 'PROMPT_INJECTION_DETECTED';
-
-  constructor(readonly boundary: ScreeningBoundary) {
-    super(`Prompt injection detected at ${boundary} boundary`);
-    this.name = 'PromptInjectionDetectedError';
-  }
-}
-
-/** The screen could not reach a verdict. Fails closed: the run stops. */
-export class PromptInjectionScreeningError extends Error {
-  readonly code = 'PROMPT_INJECTION_SCREENING_FAILED';
-
-  constructor(options?: ErrorOptions) {
-    super('Prompt injection screening failed', options);
-    this.name = 'PromptInjectionScreeningError';
-  }
-}
-
-function isScreeningFailure(error: unknown): boolean {
-  return (
-    error instanceof PromptInjectionDetectedError || error instanceof PromptInjectionScreeningError
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
-/**
- * What one tool call came back with, and whether it worked.
- *
- * `ok` is carried rather than inferred from the wording: an MCP server can
- * relay a remote message starting "Error: " verbatim, and a caller re-reading
- * prose would record a successful call as a failure. `output` is what the
- * model sees either way. A failed call is a turn of the conversation, not an
- * exception: the model is told what went wrong so it can correct itself.
- */
-export interface ToolOutcome {
-  ok: boolean;
-  output: string;
-  /** Why the call failed, as a plain message: what `output` says to the model, without the framing. */
-  error?: string;
-  /** The output was withheld because the screen flagged it. */
-  quarantined?: boolean;
-  /** No call was made: the approval handler refused it. */
-  declined?: boolean;
-}
-
-export interface ModelRoute {
-  client: ChatProvider;
-  model: string;
-}
-
-/** Ordered route chain with its non-empty invariant represented in the type. */
-export type ModelRouteChain = readonly [ModelRoute, ...ModelRoute[]];
-
 /** `security.screen` from solenoid-security, or anything with its contract. */
 export type Screener = (input: TextInput) => Promise<ScreeningResult>;
-
-/**
- * solenoid-security's tool request, plus the run's signal. `args` are
- * validated: a call that fails its schema is refused before anybody is asked.
- */
-export interface ApprovalRequest extends ToolRequest {
-  /** The run's signal. An approval outlives no run. */
-  signal: AbortSignal;
-}
-
-/** Allowed, or refused with the sentence the model is given. */
-export type ApprovalHandler = (request: ApprovalRequest) => ToolVerdict | Promise<ToolVerdict>;
 
 export interface AgentLogger {
   info(obj: object, msg?: string): void;
@@ -172,33 +83,6 @@ export interface AgentLogger {
 }
 
 const silentLogger: AgentLogger = { info() {}, warn() {} };
-
-export interface RouteRef {
-  provider: string;
-  model: string;
-}
-
-/** Everything a run reports while it is in progress. */
-export type AgentEvent =
-  /** A model call is about to start. Partial output after this belongs to it. */
-  | { type: 'turn_start'; turn: number; route: RouteRef }
-  | { type: 'text_delta'; text: string }
-  | { type: 'reasoning_delta'; text: string }
-  /** A turn finished and was added to the transcript. */
-  | { type: 'assistant_turn'; message: ChatMessage }
-  | { type: 'tool_start'; id: string; name: string; kind: AgentToolKind | 'unknown'; args: unknown }
-  | ({ type: 'tool_end'; id: string; name: string; durationMs: number } & ToolOutcome)
-  /** The turn in progress failed transiently and will be re-requested. Discard its partial output. */
-  | { type: 'retry'; turn: number; delayMs: number; error: string }
-  /** The attempt failed and the task restarts on the next route. Discard the whole attempt. */
-  | { type: 'route_advanced'; from: RouteRef; to: RouteRef; error: string }
-  | {
-      type: 'guardrail';
-      boundary: ScreeningBoundary;
-      decision: ScreeningResult['decision'];
-      score?: number;
-    }
-  | { type: 'usage'; usage: TokenUsage };
 
 export interface AgentOptions {
   /** Ordered, non-empty provider/model chain. A failed attempt advances one route. */
@@ -869,106 +753,10 @@ export class Agent {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Lenient JSON recovery for backends that don't enforce the schema: peel off
- * code fences or surrounding prose. Validation still happens through zod.
- */
-export function extractJson(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed;
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence?.[1]) return fence[1].trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start !== -1 && end > start) return trimmed.slice(start, end + 1);
-  return trimmed;
-}
-
-function validateStructured(
-  raw: string,
-  schema: z.ZodType
-): { ok: true; data: unknown } | { ok: false; error: string } {
-  const json = extractJson(raw);
-  if (!json) return { ok: false, error: 'the response was empty' };
-  let value: unknown;
-  try {
-    value = JSON.parse(json);
-  } catch (error) {
-    return { ok: false, error: `invalid JSON (${error instanceof Error ? error.message : error})` };
-  }
-  const parsed = schema.safeParse(value);
-  return parsed.success
-    ? { ok: true, data: parsed.data }
-    : { ok: false, error: z.prettifyError(parsed.error) };
-}
-
 function failed(message: string): ToolOutcome {
   return { ok: false, output: `Error: ${message}`, error: message };
 }
 
 function pushToolResult(messages: ChatMessage[], id: string, name: string, content: string): void {
   messages.push({ role: 'tool', toolCallId: id, toolName: name, content, screened: true });
-}
-
-function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    // The abort wins, but the abandoned promise may still reject; observe it
-    // so it does not surface as an unhandled rejection.
-    promise.catch(() => {});
-    return Promise.reject(abortReason(signal));
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortReason(signal));
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      }
-    );
-  });
-}
-
-function waitFor(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortReason(signal));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-export function isTransientProviderError(error: unknown): boolean {
-  const candidate = error as {
-    status?: number;
-    statusCode?: number;
-    code?: string;
-    name?: string;
-    message?: string;
-    cause?: { code?: string };
-  } | null;
-  const status = candidate?.status ?? candidate?.statusCode;
-  if (status === 408 || status === 409 || status === 429) return true;
-  if (typeof status === 'number' && status >= 500) return true;
-  const code = candidate?.code ?? candidate?.cause?.code ?? '';
-  return (
-    ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT'].includes(
-      code
-    ) ||
-    ['TimeoutError', 'APIConnectionError', 'APIConnectionTimeoutError'].includes(
-      candidate?.name ?? ''
-    ) ||
-    (candidate?.name === 'TypeError' && candidate?.message?.includes('fetch failed') === true)
-  );
 }

@@ -16,7 +16,7 @@ import type { TextOrigin } from '@elicollinson/solenoid-security';
  * repos can converge on one core later.
  */
 import type OpenAI from 'openai';
-import { abortReason } from './abort.js';
+import { abortReason } from './signals.js';
 import type { FunctionToolDefinition } from './tools.js';
 import { tracedChat } from './tracing.js';
 
@@ -93,6 +93,14 @@ export interface ChatProvider {
   /** Backend label surfaced on LLM spans as llm.provider. */
   readonly providerName: string;
 }
+
+export interface ModelRoute {
+  client: ChatProvider;
+  model: string;
+}
+
+/** Ordered route chain with its non-empty invariant represented in the type. */
+export type ModelRouteChain = readonly [ModelRoute, ...ModelRoute[]];
 
 /**
  * How a backend spells reasoning.
@@ -287,4 +295,29 @@ function mergeReasoningDetails(details: unknown[]): unknown[] {
     merged.push({ ...next });
   }
   return merged;
+}
+
+/** Whether a failed provider call is worth retrying: rate limits, 5xx, dropped connections. */
+export function isTransientProviderError(error: unknown): boolean {
+  const candidate = error as {
+    status?: number;
+    statusCode?: number;
+    code?: string;
+    name?: string;
+    message?: string;
+    cause?: { code?: string };
+  } | null;
+  const status = candidate?.status ?? candidate?.statusCode;
+  if (status === 408 || status === 409 || status === 429) return true;
+  if (typeof status === 'number' && status >= 500) return true;
+  const code = candidate?.code ?? candidate?.cause?.code ?? '';
+  return (
+    ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT'].includes(
+      code
+    ) ||
+    ['TimeoutError', 'APIConnectionError', 'APIConnectionTimeoutError'].includes(
+      candidate?.name ?? ''
+    ) ||
+    (candidate?.name === 'TypeError' && candidate?.message?.includes('fetch failed') === true)
+  );
 }
