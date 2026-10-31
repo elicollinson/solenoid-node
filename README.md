@@ -141,6 +141,9 @@ Text this repository wrote (tool descriptions, the system prompt) is subtracted 
 providers:
   lmstudio:
     base_url: http://localhost:1234/v1   # api_key optional; or LMSTUDIO_API_KEY
+    stall:                 # only silence fails a request; slow streaming never does
+      first_byte_ms: 300000  # queue + prompt processing
+      idle_ms: 60000         # between chunks
   openrouter:
     base_url: https://openrouter.ai/api/v1   # key from OPENROUTER_API_KEY
 
@@ -152,7 +155,6 @@ routes:                    # tried in order
 
 agent:
   think: true              # true | false | low | medium | high
-  timeout_ms: 300000       # per route attempt
   max_turns: 25            # model calls per attempt; the last is offered no tools
   # system_prompt: ...     # replaces the built-in prompt
 

@@ -228,9 +228,8 @@ export class SubagentManager implements Background {
   }
 
   /**
-   * A model-written summary, reused while the transcript has not grown. It
-   * is a model call within the parent's attempt, so it spends the parent's
-   * timeout, and stops with `signal`.
+   * A model-written summary, reused while the transcript has not grown.
+   * Stops with `signal`.
    */
   async summary(id: string, signal: AbortSignal): Promise<string> {
     const child = this.get(id);

@@ -17,10 +17,29 @@ export type ProviderName = (typeof PROVIDER_NAMES)[number];
 export const DEFAULT_LMSTUDIO_MODEL = 'google/gemma-4-26b-a4b';
 export const DEFAULT_OPENROUTER_MODEL = 'google/gemma-4-26b-a4b-it';
 
+/**
+ * When a request to the provider counts as stalled. Only silence counts: a
+ * model still streaming is never cut off, however slow. A stalled request
+ * fails the attempt and the agent moves to the next route.
+ */
+export const StallConfigSchema = z
+  .object({
+    /** Until the first byte: the queue plus prompt processing, which grows with the context. */
+    first_byte_ms: z
+      .number()
+      .int()
+      .positive()
+      .default(5 * 60_000),
+    /** Between chunks once the response is streaming. */
+    idle_ms: z.number().int().positive().default(60_000),
+  })
+  .prefault({});
+
 export const ProviderConfigSchema = z.object({
   base_url: z.url(),
   /** Overridden by LMSTUDIO_API_KEY / OPENROUTER_API_KEY when set. */
   api_key: z.string().optional(),
+  stall: StallConfigSchema,
 });
 
 export const ProvidersConfigSchema = z
@@ -49,12 +68,6 @@ export const AgentConfigSchema = z
   .object({
     /** Reasoning: true for the backend default, false to disable, or an effort level. */
     think: ThinkSchema.default(true),
-    /** Per-attempt deadline. A failed attempt moves to the next route. */
-    timeout_ms: z
-      .number()
-      .int()
-      .positive()
-      .default(5 * 60_000),
     /** Model calls per attempt. The last is offered no tools, so the model must answer. */
     max_turns: z.number().int().positive().default(25),
     /** Replaces the built-in system prompt. */
@@ -70,7 +83,6 @@ export const ScreeningConfigSchema = z
     model: z.string().min(1).default(DEFAULT_LMSTUDIO_MODEL),
     /** A concern score above this flags. */
     threshold: z.number().min(0).max(1).default(0.5),
-    timeout_ms: z.number().int().positive().default(120_000),
   })
   .prefault({});
 

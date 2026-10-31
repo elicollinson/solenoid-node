@@ -15,6 +15,7 @@ import {
   type ChatProvider,
   PromptInjectionDetectedError,
   PromptInjectionScreeningError,
+  ProviderStalledError,
   defineTool,
 } from '../../src/core/index.js';
 
@@ -320,6 +321,20 @@ describe('Routes, retries and cancellation', () => {
     expect(first.calls).toHaveLength(5);
     expect(events.filter((e) => e.type === 'retry')).toHaveLength(4);
   }, 15_000);
+
+  test('a stalled server advances straight to the next route, without retrying', async () => {
+    const first = new ScriptedProvider('first', [new ProviderStalledError('idle', 60_000)]);
+    const second = new ScriptedProvider('second', [say('fallback')]);
+    const agent = new Agent({
+      routes: [
+        { client: first, model: 'a' },
+        { client: second, model: 'b' },
+      ],
+    });
+
+    expect(await agent.run('go')).toBe('fallback');
+    expect(first.calls).toHaveLength(1);
+  });
 
   test('an interrupt ends the run without trying another route', async () => {
     const controller = new AbortController();

@@ -28,6 +28,7 @@ import {
   OpenAICompatibleProvider,
   type RouteRef,
   type Screener,
+  stallGuardedFetch,
 } from '../core/index.js';
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
@@ -44,12 +45,27 @@ import { SubagentManager, subagentToolNames } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
 const LMSTUDIO_PLACEHOLDER_KEY = 'lm-studio';
+/**
+ * The longest timer a runtime allows: in effect none. Given to the SDK and to
+ * the judge, whose own defaults are wall-clock deadlines (10 min, 120 s).
+ */
+const NO_TIMEOUT_MS = 2 ** 31 - 1;
 
 /** The key to send, or undefined when the provider cannot be used without one. */
 function providerKey(provider: ProviderName, settings: AppSettings): string | undefined {
   const key = getProviderApiKey(provider, settings);
   if (key) return key;
   return provider === 'lmstudio' ? LMSTUDIO_PLACEHOLDER_KEY : undefined;
+}
+
+/**
+ * Every request to `provider`, the agent's and the judge's alike, fails only
+ * when the server goes quiet for longer than its stall limits. Pair it with
+ * NO_TIMEOUT_MS, so the guard is the only clock.
+ */
+function providerFetch(provider: ProviderName, settings: AppSettings): typeof fetch {
+  const { first_byte_ms, idle_ms } = settings.providers[provider].stall;
+  return stallGuardedFetch({ firstByteMs: first_byte_ms, idleMs: idle_ms });
 }
 
 function missingKeyHint(provider: ProviderName): string {
@@ -83,8 +99,14 @@ function createRoutes(settings: AppSettings): RouteChain {
     let client = clients.get(provider);
     if (!client) {
       client = new OpenAICompatibleProvider(
-        // The agent loop owns retries and fallback.
-        new OpenAI({ baseURL: settings.providers[provider].base_url, apiKey, maxRetries: 0 }),
+        new OpenAI({
+          baseURL: settings.providers[provider].base_url,
+          apiKey,
+          // The agent loop owns retries and fallback, and the stall guard owns time.
+          maxRetries: 0,
+          timeout: NO_TIMEOUT_MS,
+          fetch: providerFetch(provider, settings),
+        }),
         provider
       );
       clients.set(provider, client);
@@ -119,7 +141,8 @@ function createScreener(settings: AppSettings): Screener | undefined {
     model: config.model,
     apiKey,
     threshold: config.threshold,
-    timeoutMs: config.timeout_ms,
+    fetchFn: providerFetch(config.provider, settings),
+    timeoutMs: NO_TIMEOUT_MS,
   });
   // The registry is the one defineTool and the system prompt register into,
   // so the screen subtracts this repository's own text before judging.
@@ -162,7 +185,6 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       systemPrompt: withToday(prompt),
       tools: agentTools,
       think: settings.agent.think,
-      timeoutMs: settings.agent.timeout_ms,
       maxTurns: settings.agent.max_turns,
       screen,
       logger: agentLogger,
