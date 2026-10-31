@@ -55,6 +55,8 @@ export const AgentConfigSchema = z
       .int()
       .positive()
       .default(5 * 60_000),
+    /** Model calls per attempt. The last is offered no tools, so the model must answer. */
+    max_turns: z.number().int().positive().default(25),
     /** Replaces the built-in system prompt. */
     system_prompt: z.string().min(10).optional(),
   })

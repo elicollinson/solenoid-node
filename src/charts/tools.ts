@@ -76,6 +76,7 @@ export function parseChartArgs(args: Record<string, unknown>): {
             title,
             series,
             height,
+            width,
             showYAxis: true,
             xLabels,
           },

@@ -216,6 +216,57 @@ describe('Agent loop', () => {
     expect(end.error).not.toStartWith('Error:');
   });
 
+  test('refused arguments are explained with what was sent', async () => {
+    const provider = new ScriptedProvider('fake', [
+      call('echo', '{"text": "unterminated'),
+      call('echo', { text: 5 }, 'call_echo_2'),
+      say('ok'),
+    ]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [echoTool] });
+
+    await agent.run('go');
+
+    const [malformed] = provider.calls[1]!.filter((m) => m.role === 'tool');
+    expect(malformed?.content).toContain('not valid JSON');
+    expect(malformed?.content).toContain('{"text": "unterminated');
+    const invalid = provider.calls[2]!.filter((m) => m.role === 'tool')[1];
+    expect(invalid?.content).toContain('text');
+    expect(invalid?.content).toContain('You sent: {"text":5}');
+  });
+
+  test('the last turn is offered no tools and must answer', async () => {
+    const offered: number[] = [];
+    const keepCalling = (messages: ChatMessage[], opts: ChatOptions): ChatMessage => {
+      offered.push(opts.tools.length);
+      return opts.tools.length
+        ? call('echo', { text: 'again' }, `call_${messages.length}`)
+        : say('best effort');
+    };
+    const provider = new ScriptedProvider('fake', [keepCalling, keepCalling, keepCalling]);
+    const agent = new Agent({
+      routes: [{ client: provider, model: 'm' }],
+      tools: [echoTool],
+      maxTurns: 3,
+    });
+
+    expect(await agent.run('go')).toBe('best effort');
+    expect(offered).toEqual([1, 1, 0]);
+    expect(provider.calls[2]!.at(-1)?.content).toContain('last turn');
+  });
+
+  test('a call made on the last turn anyway is not run', async () => {
+    const provider = new ScriptedProvider('fake', [call('echo', { text: 'x' })]);
+    const agent = new Agent({
+      routes: [{ client: provider, model: 'm' }],
+      tools: [echoTool],
+      maxTurns: 1,
+    });
+    const events: AgentEvent[] = [];
+
+    await expect(agent.run('go', { onEvent: (e) => events.push(e) })).rejects.toThrow('last turn');
+    expect(events.some((e) => e.type === 'tool_start')).toBe(false);
+  });
+
   test('reads are never put to the approval handler', async () => {
     const provider = new ScriptedProvider('fake', [call('echo', { text: 'a' }), say('ok')]);
     const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [echoTool] });
