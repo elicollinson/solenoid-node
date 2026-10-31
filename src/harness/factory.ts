@@ -39,7 +39,7 @@ import {
   SUMMARIZER_PROMPT,
   withToday,
 } from './prompt.js';
-import { Session } from './session.js';
+import { Session, declineUnattended } from './session.js';
 import { SubagentManager, subagentToolNames } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
@@ -171,14 +171,11 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   // One summarizer for every session's subagents: no tools, and the
   // transcript it reads is this process's own agents' work.
   const summarizer = makeAgent('solenoid/summarizer', [], SUMMARIZER_PROMPT);
-  const summarize = async (task: string, transcript: string) => {
-    const result = await summarizer.runMessages([
-      {
-        role: 'user',
-        content: `Task:\n${task}\n\nTranscript:\n${transcript}`,
-        origin: 'agent',
-      },
-    ]);
+  const summarize = async (task: string, transcript: string, signal: AbortSignal) => {
+    const result = await summarizer.runMessages(
+      [{ role: 'user', content: `Task:\n${task}\n\nTranscript:\n${transcript}`, origin: 'agent' }],
+      { signal }
+    );
     return result.output;
   };
 
@@ -194,10 +191,11 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     if (!canSpawn) return track(new Session(plainAgent, { approve }));
     const manager = new SubagentManager({
       tools,
-      createSession: (name, childTools, options) =>
+      // Nobody can approve a child's writes: it is told each was declined, and says so.
+      createSession: (name, childTools) =>
         new Session(
           makeAgent(`solenoid/${name}`, childTools, `${systemPrompt}\n\n${SUBAGENT_ROLE}`),
-          options
+          { approve: declineUnattended }
         ),
       summarize,
     });

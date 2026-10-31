@@ -5,7 +5,12 @@ import { describe, expect, test } from 'bun:test';
 import type { AGUIEvent } from '@ag-ui/core';
 import { z } from 'zod';
 import { Agent, type AgentTool, type ChatMessage, defineTool } from '../../src/core/index.js';
-import { type AutoTurn, Session, SubagentManager } from '../../src/harness/index.js';
+import {
+  type AutoTurn,
+  Session,
+  SubagentManager,
+  declineUnattended,
+} from '../../src/harness/index.js';
 import { ScriptedProvider, type Step, call, say } from '../helpers/scripted-provider.js';
 
 const echo = defineTool({
@@ -35,12 +40,12 @@ function managerWith(scripts: Step[][], tools: AgentTool[] = [echo, note]) {
   const given: string[][] = [];
   const manager = new SubagentManager({
     tools,
-    createSession: (_name, childTools, options) => {
+    createSession: (_name, childTools) => {
       given.push(childTools.map((t) => t.definition.function.name));
       const provider = new ScriptedProvider('child', scripts.shift() ?? []);
       return new Session(
         new Agent({ routes: [{ client: provider, model: 'm' }], tools: childTools }),
-        options
+        { approve: declineUnattended }
       );
     },
     summarize: async (task, transcript) =>
@@ -62,7 +67,7 @@ describe('SubagentManager', () => {
     const { entries, total } = manager.transcript('sa-1', 0, 10);
     expect(total).toBe(4);
     expect(entries[1]).toContain('call echo');
-    expect(await manager.summary('sa-1')).toContain('look it up');
+    expect(await manager.summary('sa-1', new AbortController().signal)).toContain('look it up');
   });
 
   test('a subagent gets only the tools it is given, and unknown names are refused', () => {
@@ -144,7 +149,8 @@ describe('Subagent tools in the loop', () => {
 
     await expect(parent.run('go')).rejects.toThrow('route broke');
     expect(second.calls).toHaveLength(0);
-    expect(manager.all()).toHaveLength(1);
+    expect(manager.get('sa-1').status).not.toBe('cancelled');
+    expect(() => manager.get('sa-2')).toThrow('No subagent sa-2');
   });
 });
 
