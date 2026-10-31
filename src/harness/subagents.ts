@@ -79,6 +79,14 @@ interface SubagentManagerOptions {
 }
 
 const isActive = (child: Subagent) => child.status === 'queued' || child.status === 'running';
+/** Done or failed: what the parent hears of. Only the parent cancels a child. */
+const isResolved = (child: Subagent) => child.status === 'done' || child.status === 'failed';
+/** How the parent's model sees a child named, in its status and its messages. */
+const label = (child: Subagent) => `${child.name} (${child.id})`;
+/** A task as compared for a repeat spawn: case and spacing aside. */
+const taskKey = (task: string) => task.trim().replace(/\s+/g, ' ').toLowerCase();
+/** Characters of a running child's task its status line shows. */
+const STATUS_TASK_CHARS = 80;
 
 export class SubagentManager implements Background {
   private readonly children = new Map<string, Subagent>();
@@ -86,7 +94,7 @@ export class SubagentManager implements Background {
   private running = 0;
   private next = 1;
   /** Children that resolved, done or failed, whose message the parent has not had yet. */
-  private resolved: Subagent[] = [];
+  private readonly resolved = new Set<Subagent>();
   private newsListener: (() => void) | undefined;
 
   constructor(private readonly options: SubagentManagerOptions) {}
@@ -102,9 +110,6 @@ export class SubagentManager implements Background {
         `Unknown tools ${unknown.join(', ')}; a subagent can have: ${[...available.keys()].join(', ')}`
       );
     }
-    // Asked again for work already under way: the same child, not a second one.
-    const same = [...this.children.values()].find((c) => isActive(c) && c.task === task);
-    if (same) return same;
     const tools = toolNames?.length
       ? toolNames.map((n) => available.get(n)!)
       : [...available.values()];
@@ -143,10 +148,16 @@ export class SubagentManager implements Background {
     if (isActive(child)) child.inbox.push(text);
     else {
       // The parent is taking it up again: its last resolution is out of date.
-      this.resolved = this.resolved.filter((c) => c !== child);
+      this.resolved.delete(child);
       this.start(child, text);
     }
     return child;
+  }
+
+  /** A child queued or running on this task already: a repeat spawn gets it, not a second one. */
+  underWay(task: string): Subagent | undefined {
+    const key = taskKey(task);
+    return this.select().find((c) => isActive(c) && taskKey(c.task) === key);
   }
 
   get(id: string): Subagent {
@@ -154,20 +165,6 @@ export class SubagentManager implements Background {
     if (!child) {
       const known = [...this.children.keys()];
       throw new Error(`No subagent ${id}${known.length ? `; known: ${known.join(', ')}` : ''}`);
-    }
-    return child;
-  }
-
-  /**
-   * A child that has finished. The parent hears from one still at work when
-   * it finishes, so reading it before then is refused rather than polled.
-   */
-  private finished(id: string): Subagent {
-    const child = this.get(id);
-    if (isActive(child)) {
-      throw new Error(
-        `${id} is still ${child.status}. You will get a message from it when it finishes; until then, carry on or end your turn.`
-      );
     }
     return child;
   }
@@ -196,10 +193,9 @@ export class SubagentManager implements Background {
    * cancels one.
    */
   takeNews(): string | undefined {
-    const finished = this.resolved;
+    const finished = [...this.resolved];
     if (!finished.length) return undefined;
-    this.resolved = [];
-    const label = (c: Subagent) => `${c.name} (${c.id})`;
+    this.resolved.clear();
     const heading = finished.map((c) => `${label(c)} ${c.status}`).join(', ');
     const details = finished.map((c) =>
       c.status === 'done'
@@ -213,22 +209,31 @@ export class SubagentManager implements Background {
     this.newsListener = listener;
   }
 
-  /** Where every child stands, while any is queued or running; for each parent message. */
+  /**
+   * Where the children stand, while any is queued or running, for each
+   * parent message: those at work in full, with their task, so the model
+   * sees what is covered; those finished in a line, their outcome having
+   * come as a message.
+   */
   status(): string | undefined {
-    const children = [...this.children.values()];
-    if (!children.some(isActive)) return undefined;
-    const lines = children.map((c) => {
-      const v = view(c);
-      const doing = v.running ? `, running ${v.running}` : '';
-      return `- ${c.id} ${c.name}: ${c.status}, ${v.elapsedSeconds}s, ${v.steps} steps${doing}`;
+    const active = this.select().filter(isActive);
+    if (!active.length) return undefined;
+    const lines = active.map((c) => {
+      const doing = c.current ? `, running ${c.current}` : '';
+      const task = truncate(c.task, STATUS_TASK_CHARS);
+      return `- ${label(c)}: ${c.status}, ${elapsedSeconds(c)}s, ${c.steps} steps${doing}. Task: ${task}`;
     });
+    const finished = this.select().filter((c) => !isActive(c));
+    if (finished.length) {
+      lines.push(`Finished: ${finished.map((c) => `${label(c)} ${c.status}`).join(', ')}.`);
+    }
     return `${SUBAGENT_STATUS}\n${lines.join('\n')}`;
   }
 
   /** Settles once every child has finished, including any a message restarts meanwhile. */
   async idle(): Promise<void> {
     for (;;) {
-      const active = [...this.children.values()].filter(isActive);
+      const active = this.select().filter(isActive);
       if (!active.length) return;
       await Promise.all(active.map((c) => c.settled));
     }
@@ -236,7 +241,7 @@ export class SubagentManager implements Background {
 
   /** A model-written summary, reused while the transcript has not grown. */
   async summary(id: string): Promise<string> {
-    const child = this.finished(id);
+    const child = this.get(id);
     const entries = transcriptEntries(child.session.messages);
     if (child.summary?.covers === entries.length) return child.summary.text;
     const text = await this.options.summarize(
@@ -248,7 +253,7 @@ export class SubagentManager implements Background {
   }
 
   transcript(id: string, from: number, count: number): { entries: string[]; total: number } {
-    const all = transcriptEntries(this.finished(id).session.messages);
+    const all = transcriptEntries(this.get(id).session.messages);
     return { entries: all.slice(from, from + count), total: all.length };
   }
 
@@ -265,7 +270,7 @@ export class SubagentManager implements Background {
     child.settled = this.whenFree(child)
       .then((slot) => this.run(child, slot, text))
       .then(() => {
-        if (child.status === 'done' || child.status === 'failed') this.resolved.push(child);
+        if (isResolved(child)) this.resolved.add(child);
         this.newsListener?.();
       });
   }
@@ -339,14 +344,18 @@ export class SubagentManager implements Background {
   }
 }
 
+function elapsedSeconds(child: Subagent): number {
+  const ms = child.startedAt ? (child.endedAt ?? Date.now()) - child.startedAt : 0;
+  return Math.round(ms / 1000);
+}
+
 /** A child as a tool shows it to the parent's model. */
 function view(child: Subagent) {
-  const elapsed = child.startedAt ? ((child.endedAt ?? Date.now()) - child.startedAt) / 1000 : 0;
   return {
     id: child.id,
     name: child.name,
     status: child.status,
-    elapsedSeconds: Math.round(elapsed),
+    elapsedSeconds: elapsedSeconds(child),
     steps: child.steps,
     ...(child.current ? { running: child.current } : {}),
     ...(child.declined.length ? { declinedWrites: child.declined } : {}),
@@ -386,9 +395,24 @@ export function subagentToolNames(): string[] {
   return subagentTools(null as unknown as SubagentManager).map((t) => t.definition.function.name);
 }
 
+/** A spawn's or a restart's result: the child, and what to do next. */
+function started(child: Subagent, note?: string) {
+  return { ...view(child), next: note ? `${note} ${SUBAGENT_STARTED}` : SUBAGENT_STARTED };
+}
+
+/**
+ * A child still at work, as a read of it answers: the parent hears from it
+ * when it finishes, so reading it before then is not polled. An ordinary
+ * result rather than an error, which a small model tends to retry.
+ */
+function stillAtWork(child: Subagent) {
+  return isActive(child)
+    ? { ...view(child), note: `Still ${child.status}. ${SUBAGENT_STARTED}` }
+    : undefined;
+}
+
 function subagentTools(manager: SubagentManager): AgentTool[] {
   const id = z.string().describe('The subagent id, such as "sa-1"');
-
   const tools = [
     defineTool({
       name: 'spawn_subagent',
@@ -404,16 +428,11 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
           .describe('Only these of your tools, when it needs fewer than all'),
       }),
       execute: ({ name, task, tools }, context) => {
+        const existing = manager.underWay(task);
+        if (existing) return started(existing, 'A subagent is already on this task: this one.');
         context.commit();
-        const before = manager.select().length;
         const child = manager.spawn(name, task, tools);
-        const already = manager.select().length === before;
-        return {
-          ...view(child),
-          tools: child.tools,
-          ...(already ? { note: 'A subagent was already on this task; this is it.' } : {}),
-          next: SUBAGENT_STARTED,
-        };
+        return { ...started(child), tools: child.tools };
       },
     }),
     defineTool({
@@ -422,10 +441,11 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
         "A short written summary of a finished subagent's work: what it did, found and could not do.",
       kind: 'internal',
       schema: z.object({ id }),
-      execute: async ({ id }, context) => ({
-        ...view(manager.get(id)),
-        summary: await context.untimed(manager.summary(id)),
-      }),
+      execute: async ({ id }, context) =>
+        stillAtWork(manager.get(id)) ?? {
+          ...view(manager.get(id)),
+          summary: await context.untimed(manager.summary(id)),
+        },
     }),
     defineTool({
       name: 'read_subagent_transcript',
@@ -437,7 +457,8 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
         from: z.number().int().min(0).default(0).describe('First entry to read'),
         count: z.number().int().min(1).max(30).default(10).describe('How many entries'),
       }),
-      execute: ({ id, from, count }) => manager.transcript(id, from, count),
+      execute: ({ id, from, count }) =>
+        stillAtWork(manager.get(id)) ?? manager.transcript(id, from, count),
     }),
     defineTool({
       name: 'message_subagent',
@@ -451,7 +472,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       execute: ({ id, message }, context) => {
         // A finished child starts a new turn: replaying the call would start it twice.
         context.commit();
-        return { ...view(manager.message(id, message)), next: SUBAGENT_STARTED };
+        return started(manager.message(id, message));
       },
     }),
     defineTool({

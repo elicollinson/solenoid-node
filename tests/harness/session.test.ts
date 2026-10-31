@@ -231,10 +231,7 @@ describe('Session (AG-UI)', () => {
   });
 
   test('a send while a turn runs waits for it to end', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     const provider = new ScriptedProvider('fake', [
       () => gate.then(() => say('first')) as never,
       say('second'),

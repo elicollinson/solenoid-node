@@ -143,7 +143,7 @@ export class Session {
   /**
    * Run turns the session starts itself: when its background work has news
    * and no turn is running, `handler` is called with the turn to run.
-   * Without a handler, news waits for the model to ask (the subagent tools).
+   * Without a handler, news waits until one is set.
    * Returns the call that removes the handler.
    */
   onAutoTurn(handler: (turn: AutoTurn) => void): () => void {
@@ -208,11 +208,18 @@ export class Session {
     role: OpeningRole,
     { onEvent, signal, origin = 'operator' }: SendOptions
   ): Promise<string> {
-    // In the same message rather than one of its own: some chat templates
-    // (Gemma's) refuse two user messages in a row.
+    // The model reads where the background work stands with this message,
+    // in the same message rather than one of its own, since some chat
+    // templates (Gemma's) refuse two user messages in a row. The transcript
+    // keeps the words alone, so old snapshots never contradict the current.
     const status = this.options.background?.status();
-    const content = status ? `${text}\n\n${status}` : text;
-    const user: ChatMessage = { role: 'user', content, origin };
+    const user: ChatMessage = { role: 'user', content: text, origin };
+    const sent: ChatMessage = status ? { ...user, content: `${text}\n\n${status}` } : user;
+    // The agent copies its input, so the sent message is found by its text.
+    const kept = (messages: ChatMessage[]) => {
+      const at = messages.findLastIndex((m) => m.role === 'user' && m.content === sent.content);
+      return messages.map((m, i) => (i === at ? { ...m, content: text } : m));
+    };
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
@@ -225,12 +232,12 @@ export class Session {
     // person's message the moment it calls send.
     encoder.startTurn({ id: crypto.randomUUID(), text, role });
     try {
-      const result = await this.agent.runMessages([...this.transcript, user], {
+      const result = await this.agent.runMessages([...this.transcript, sent], {
         signal,
         onEvent: (event) => encoder.handle(event),
         approve: this.options.approve ?? ((request) => this.interrupt(request, encoder)),
       });
-      this.transcript = result.messages;
+      this.transcript = kept(result.messages);
       encoder.complete();
       return result.output;
     } catch (error) {

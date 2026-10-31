@@ -110,13 +110,12 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 | Tool | Does |
 |------|------|
 | `spawn_subagent(name, task, tools?)` | Starts a child session in the background, with the parent's tools (or a subset) minus these |
-| `list_subagents`, `subagent_status(id)` | Where each stands: queued, running, done, failed or cancelled, and its answer |
-| `subagent_summary(id)` | A model-written summary of its work, reused until its transcript grows |
-| `read_subagent_transcript(id, from, count)` | A page of its transcript in detail |
+| `subagent_summary(id)` | A model-written summary of a finished one's work, reused until its transcript grows |
+| `read_subagent_transcript(id, from, count)` | A page of a finished one's transcript in detail |
 | `message_subagent(id, message)` | A follow-up: a running one reads it when its current turn ends, a finished one starts again on it |
 | `cancel_subagent(id)` | Stops one |
 
-Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model serves one request at a time. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended and listed in its status.
+Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model serves one request at a time. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended.
 
 The parent orchestrates and never blocks on a child. It spawns subagents, tells the person what is running, and ends its turn, so the person can keep talking to it and it can spawn more at any time. While any subagent runs, the model's copy of every message that opens a parent turn ends with the status of all of them. That covers the person's messages and the subagents' own. The thread the client draws shows the person's words alone.
 
