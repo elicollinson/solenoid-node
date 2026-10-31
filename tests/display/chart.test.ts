@@ -2,7 +2,7 @@
  * Chart argument parsing.
  */
 import { describe, expect, test } from 'bun:test';
-import { parseChartArgs } from '../../src/charts/index.js';
+import { parseChartArgs } from '../../src/display/index.js';
 
 describe('parseChartArgs', () => {
   test('a line graph gets a width, 60 columns unless one is given', () => {

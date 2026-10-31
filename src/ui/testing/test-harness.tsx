@@ -1,3 +1,4 @@
+import { EventType } from '@ag-ui/core';
 import { TextInput } from '@inkjs/ui';
 import { Box, Text, useInput } from 'ink';
 /**
@@ -14,9 +15,13 @@ import { Box, Text, useInput } from 'ink';
  */
 import { render } from 'ink-testing-library';
 import type React from 'react';
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
+// Not harness/index.js, which would load the whole harness (MCP, providers,
+// screening) into every mock-agent test.
+import { CUSTOM_EVENTS, customValue } from '../../harness/ag-ui/encoder.js';
+import { approvalAnswer } from '../../harness/session.js';
 import { MockAgent } from './mock-agent.js';
 import type {
   AgentEvent,
@@ -90,25 +95,34 @@ class RealAgentWrapper implements AgentInterface {
 
     session
       .send(input, {
-        approve: () => ({ allow: true }),
         onEvent: (event) => {
           switch (event.type) {
-            case 'text_delta':
-              push({ type: 'text', content: event.text });
+            case EventType.TEXT_MESSAGE_CONTENT:
+              push({ type: 'text', content: event.delta });
               break;
-            case 'tool_start':
-              push({ type: 'tool_start', toolCallId: event.id, toolName: event.name });
+            case EventType.TOOL_CALL_START:
               push({
-                type: 'tool_args',
-                toolCallId: event.id,
-                toolArgs: JSON.stringify(event.args),
+                type: 'tool_start',
+                toolCallId: event.toolCallId,
+                toolName: event.toolCallName,
               });
               break;
-            case 'tool_end':
-              push({ type: 'tool_end', toolCallId: event.id });
+            case EventType.TOOL_CALL_ARGS:
+              push({ type: 'tool_args', toolCallId: event.toolCallId, toolArgs: event.delta });
               break;
-            case 'route_advanced':
-              push({ type: 'status', content: `Switching to ${event.to.provider}` });
+            case EventType.TOOL_CALL_RESULT:
+              push({ type: 'tool_end', toolCallId: event.toolCallId });
+              break;
+            case EventType.CUSTOM: {
+              const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
+              if (route) push({ type: 'status', content: `Switching to ${route.to.provider}` });
+              break;
+            }
+            case EventType.RUN_FINISHED:
+              // Tests run unattended with every write allowed.
+              if (event.outcome?.type === 'interrupt') {
+                session.resume(event.outcome.interrupts.map((i) => approvalAnswer(i.id, 'allow')));
+              }
               break;
           }
         },
@@ -607,7 +621,7 @@ export class SolenoidTestHarness {
         { isActive: isProcessing }
       );
 
-      const handleSubmit = useCallback(async (text: string) => {
+      const handleSubmit = async (text: string) => {
         const trimmed = text.trim();
         if (!trimmed) return;
 
@@ -724,14 +738,13 @@ export class SolenoidTestHarness {
           );
         }
 
-        const wasInterrupted = interruptRef.current;
         interruptRef.current = false;
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false, wasInterrupted } : m))
+          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
         );
         setIsProcessing(false);
         setStatus('Ready');
-      }, []);
+      };
 
       return (
         <Box flexDirection="column">

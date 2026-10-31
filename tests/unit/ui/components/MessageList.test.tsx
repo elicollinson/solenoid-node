@@ -1,383 +1,140 @@
 /**
  * MessageList Component Tests
  *
- * Unit tests for the MessageList component that displays chat messages.
+ * The list draws an AG-UI thread: labels, streaming text, markdown once a
+ * reply is complete, tool status lines, components and notices.
  */
 import { describe, expect, it } from 'bun:test';
+import type { Message } from '@ag-ui/core';
 import { render } from 'ink-testing-library';
-import React from 'react';
-import { type Message, MessageList } from '../../../../src/ui/components/MessageList.js';
+import { SOLENOID_METADATA_KEY } from '../../../../src/harness/index.js';
+import { MessageList } from '../../../../src/ui/components/MessageList.js';
+
+const user = (id: string, content: string): Message => ({ id, role: 'user', content });
+const reply = (id: string, content: string, toolCalls?: string[]): Message => ({
+  id,
+  role: 'assistant',
+  content,
+  ...(toolCalls
+    ? {
+        toolCalls: toolCalls.map((name) => ({
+          id: `call-${name}`,
+          type: 'function' as const,
+          function: { name, arguments: '{}' },
+        })),
+      }
+    : {}),
+});
+const result = (name: string, extra: Record<string, unknown> = {}): Message =>
+  ({
+    id: `call-${name}:result`,
+    role: 'tool',
+    toolCallId: `call-${name}`,
+    content: 'ok',
+    ...extra,
+  }) as Message;
 
 describe('MessageList', () => {
-  it('shows empty state when no messages', () => {
-    const { lastFrame } = render(<MessageList messages={[]} />);
-
+  it('shows the empty state', () => {
+    const { lastFrame } = render(<MessageList thread={[]} />);
     expect(lastFrame()).toContain('No messages yet');
-    expect(lastFrame()).toContain('Type something to get started');
   });
 
-  it('renders user message with "You" label', () => {
-    const messages: Message[] = [
+  it('labels the person and the agent, in order', () => {
+    const { lastFrame } = render(
+      <MessageList thread={[user('u1', 'First'), reply('a1', 'Second')]} />
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('You');
+    expect(frame).toContain('Solenoid');
+    expect(frame.indexOf('First')).toBeLessThan(frame.indexOf('Second'));
+  });
+
+  it('draws notices as System messages where they were posted', () => {
+    const { lastFrame } = render(
+      <MessageList
+        thread={[user('u1', 'hi'), reply('a1', 'hello')]}
+        notices={[{ id: 'n1', text: 'Interrupted.', at: 2 }]}
+      />
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('System');
+    expect(frame.indexOf('hello')).toBeLessThan(frame.indexOf('Interrupted.'));
+  });
+
+  it('shows a cursor while the reply streams, and none once it is done', () => {
+    const thread = [user('u1', 'hi'), reply('a1', 'Typing')];
+    expect(render(<MessageList thread={thread} streaming />).lastFrame()).toContain('▌');
+    expect(render(<MessageList thread={thread} />).lastFrame()).not.toContain('▌');
+  });
+
+  it('renders markdown once the reply is complete', () => {
+    const thread = [user('u1', 'hi'), reply('a1', 'This is **bold** text\n\n- **First** item')];
+    const done = render(<MessageList thread={thread} />).lastFrame()!;
+    expect(done).toContain('bold');
+    expect(done).not.toContain('**');
+    expect(render(<MessageList thread={thread} streaming />).lastFrame()).toContain('**bold**');
+  });
+
+  it('shows reasoning only while streaming, when asked to', () => {
+    const thread: Message[] = [
+      user('u1', 'hi'),
+      { id: 'r1', role: 'reasoning', content: 'pondering the request' },
+      reply('a1', 'Answer'),
+    ];
+    expect(render(<MessageList thread={thread} streaming showReasoning />).lastFrame()).toContain(
+      'pondering the request'
+    );
+    expect(render(<MessageList thread={thread} streaming />).lastFrame()).not.toContain(
+      'pondering'
+    );
+    expect(render(<MessageList thread={thread} showReasoning />).lastFrame()).not.toContain(
+      'pondering'
+    );
+  });
+
+  it('marks a tool call running, completed or failed', () => {
+    const thread: Message[] = [
+      user('u1', 'go'),
+      reply('a1', 'Working on it.', ['read_webpage', 'universal_search', 'save_note']),
+      result('universal_search'),
+      result('save_note', { error: 'HTTP 404' }),
+    ];
+    const frame = render(<MessageList thread={thread} streaming />).lastFrame()!;
+    expect(frame).toContain('◐ read_webpage');
+    expect(frame).toContain('● universal_search');
+    expect(frame).toContain('✗ save_note');
+    expect(frame).toContain('HTTP 404');
+  });
+
+  it('words declined and quarantined calls, and calls a finished reply never ran', () => {
+    const thread: Message[] = [
+      user('u1', 'go'),
+      reply('a1', '', ['save_note', 'read_webpage', 'universal_search']),
+      result('save_note', { metadata: { [SOLENOID_METADATA_KEY]: { declined: true } } }),
+      result('read_webpage', { metadata: { [SOLENOID_METADATA_KEY]: { quarantined: true } } }),
+    ];
+    const frame = render(<MessageList thread={thread} />).lastFrame()!;
+    expect(frame).toContain('declined');
+    expect(frame).toContain('possible prompt injection');
+    expect(frame).toContain('not run');
+  });
+
+  it('draws a chart component after the reply text', () => {
+    const thread: Message[] = [
+      user('u1', 'chart'),
+      reply('a1', 'Here it is.', ['render_chart']),
       {
-        id: '1',
-        role: 'user',
-        content: 'Hello agent',
+        id: 'call-render_chart:display',
+        role: 'activity',
+        activityType: 'solenoid.chart',
+        content: { chartType: 'bar', title: 'Fruit', data: [{ label: 'Apples', value: 3 }] },
       },
+      result('render_chart'),
     ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('You');
-    expect(lastFrame()).toContain('Hello agent');
-  });
-
-  it('renders assistant message with "Solenoid" label', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Hello human',
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('Solenoid');
-    expect(lastFrame()).toContain('Hello human');
-  });
-
-  it('renders system message with "System" label', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'system',
-        content: 'System notification',
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('System');
-    expect(lastFrame()).toContain('System notification');
-  });
-
-  it('shows streaming cursor when message is streaming', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Thinking',
-        isStreaming: true,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    // Streaming cursor character
-    expect(lastFrame()).toContain('▌');
-  });
-
-  it('does not show cursor for completed messages', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Complete response',
-        isStreaming: false,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('Complete response');
-    expect(lastFrame()).not.toContain('▌');
-  });
-
-  it('renders multiple messages in order', () => {
-    const messages: Message[] = [
-      { id: '1', role: 'user', content: 'First message' },
-      { id: '2', role: 'assistant', content: 'Second message' },
-      { id: '3', role: 'user', content: 'Third message' },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('First message');
-    expect(lastFrame()).toContain('Second message');
-    expect(lastFrame()).toContain('Third message');
-  });
-
-  it('shows reasoning only while the message is streaming', () => {
-    const streaming: Message[] = [
-      { id: '1', role: 'assistant', content: '', isStreaming: true, reasoning: 'weighing options' },
-    ];
-    const done: Message[] = [
-      { id: '1', role: 'assistant', content: 'Answer', reasoning: 'weighing options' },
-    ];
-
-    expect(render(<MessageList messages={streaming} />).lastFrame()).toContain('weighing options');
-    expect(render(<MessageList messages={done} />).lastFrame()).not.toContain('weighing options');
-  });
-
-  it('limits displayed messages when maxHeight is set', () => {
-    const messages: Message[] = Array.from({ length: 10 }, (_, i) => ({
-      id: String(i),
-      role: 'user' as const,
-      content: `Message ${i}`,
-    }));
-
-    const { lastFrame } = render(<MessageList messages={messages} maxHeight={3} />);
-
-    // Should only show the last 3 messages
-    expect(lastFrame()).not.toContain('Message 0');
-    expect(lastFrame()).toContain('Message 9');
-  });
-
-  it('renders tool call with pending status', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          {
-            type: 'tool_call',
-            toolCall: {
-              id: 'tc-1',
-              name: 'search_web',
-              status: 'pending',
-            },
-          },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('search_web');
-    expect(lastFrame()).toContain('○'); // Pending status icon
-  });
-
-  it('renders tool call with running status', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          {
-            type: 'tool_call',
-            toolCall: {
-              id: 'tc-1',
-              name: 'execute_code',
-              status: 'running',
-            },
-          },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('execute_code');
-    expect(lastFrame()).toContain('◐'); // Running status icon
-  });
-
-  it('renders tool call with completed status', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          {
-            type: 'tool_call',
-            toolCall: {
-              id: 'tc-1',
-              name: 'read_file',
-              status: 'completed',
-            },
-          },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('read_file');
-    expect(lastFrame()).toContain('●'); // Completed status icon
-  });
-
-  it('renders tool call with error status', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          {
-            type: 'tool_call',
-            toolCall: {
-              id: 'tc-1',
-              name: 'failed_tool',
-              status: 'error',
-              result: 'Connection failed',
-            },
-          },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('failed_tool');
-    expect(lastFrame()).toContain('✗'); // Error status icon
-    expect(lastFrame()).toContain('Connection failed');
-  });
-
-  it('renders interleaved text and tool calls', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          { type: 'text', content: 'Let me search for that.' },
-          {
-            type: 'tool_call',
-            toolCall: { id: 'tc-1', name: 'search_web', status: 'completed' },
-          },
-          { type: 'text', content: 'Here are the results.' },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('Let me search for that.');
-    expect(lastFrame()).toContain('search_web');
-    expect(lastFrame()).toContain('Here are the results.');
-  });
-
-  it('renders markdown - strips bold syntax from completed messages', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'This has **bold text** in it',
-        isStreaming: false,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-    const frame = lastFrame() ?? '';
-
-    // The text content should be present
-    expect(frame).toContain('bold text');
-    // The raw markdown ** markers should NOT be present
-    expect(frame).not.toContain('**bold text**');
-  });
-
-  it('renders markdown - strips bold inside list items', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content:
-          '* **General Knowledge:** writing and analysis\n* **Web Research:** searching the web',
-        isStreaming: false,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-    const frame = lastFrame() ?? '';
-
-    // The text content should be present
-    expect(frame).toContain('General Knowledge');
-    expect(frame).toContain('Web Research');
-    // The raw ** markers should NOT be present
-    expect(frame).not.toContain('**General Knowledge:**');
-    expect(frame).not.toContain('**Web Research:**');
-  });
-
-  it('renders markdown - strips list syntax from completed messages', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '* item one\n* item two\n* item three',
-        isStreaming: false,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-    const frame = lastFrame() ?? '';
-
-    // The text content should be present
-    expect(frame).toContain('item one');
-    expect(frame).toContain('item two');
-  });
-
-  it('handles empty content gracefully', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    // Should still render the label
-    expect(lastFrame()).toContain('Solenoid');
-  });
-
-  it('shows interrupted indicator when wasInterrupted=true and not streaming', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Partial response',
-        isStreaming: false,
-        wasInterrupted: true,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('-- interrupted --');
-  });
-
-  it('does not show interrupted indicator when wasInterrupted=false', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Complete response',
-        isStreaming: false,
-        wasInterrupted: false,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).not.toContain('-- interrupted --');
-  });
-
-  it('does not show interrupted indicator while still streaming', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: 'Still going',
-        isStreaming: true,
-        wasInterrupted: true,
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).not.toContain('-- interrupted --');
+    const frame = render(<MessageList thread={thread} />).lastFrame()!;
+    expect(frame).toContain('● render_chart');
+    expect(frame).toContain('Apples');
+    expect(frame.indexOf('Here it is.')).toBeLessThan(frame.indexOf('Apples'));
   });
 });

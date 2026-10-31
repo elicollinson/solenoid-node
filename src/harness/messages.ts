@@ -30,6 +30,14 @@ export function declinedMessage(tool: string, reason: 'declined' | 'unattended')
   return `${what} NOTHING WAS DONE and nothing changed. Do not call it again. Your next message must say plainly that you have not done it — never describe the change as though it happened — and ask what they would rather you did.`;
 }
 
+/** One line for a person when a model route failed and the next one takes over. */
+export function describeRouteAdvance(route: {
+  from: { provider: string };
+  to: { provider: string };
+}): string {
+  return `${route.from.provider} failed; switching to ${route.to.provider}`;
+}
+
 /** One line for a person, for any error a run can end with. */
 export function describeRunError(error: unknown): string {
   if (error instanceof AgentAbortedError) return 'Interrupted.';

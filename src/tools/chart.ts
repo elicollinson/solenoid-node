@@ -1,21 +1,22 @@
 /**
  * Chart Tool
  *
- * render_chart draws a terminal chart inline in the chat. The UI renders the
- * chart from the call's arguments (see ui/components/ChartRenderer.tsx); the
- * tool only validates them and tells the model what was drawn. Nothing is
- * stored, so there is nothing for the model to embed a second time.
+ * render_chart draws a terminal chart in the chat. A display tool: it turns
+ * the model's arguments into `solenoid.chart` content (../display/chart.ts),
+ * which reaches the person as an AG-UI activity, and the model is told only
+ * that it was shown.
  *
  * Data arrays are JSON strings rather than nested arrays, the shape every
  * backend's tool calling handled reliably.
  */
 import { z } from 'zod';
-import { parseChartArgs } from '../charts/index.js';
+
 import { defineTool } from '../core/index.js';
+import { parseChartArgs } from '../display/index.js';
 
 export const renderChartTool = defineTool({
   name: 'render_chart',
-  description: `Render a chart inline in the terminal chat. Use it whenever numbers are easier to read as a picture; never draw ASCII charts by hand.
+  description: `Show the person a chart in the chat. Use it whenever numbers are easier to read as a picture; never draw ASCII charts by hand. Draw each chart once.
 
 Chart types:
 - bar: compare values across categories. barData: '[{"label":"Q1","value":100,"color":"green"}]'
@@ -24,7 +25,8 @@ Chart types:
 - sparkline: a compact one-line trend. sparklineData: '[5,10,3,8]'
 
 Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
-  kind: 'internal',
+  kind: 'display',
+  component: 'solenoid.chart',
   schema: z.object({
     chartType: z
       .enum(['bar', 'stackedBar', 'line', 'sparkline'])
@@ -66,6 +68,6 @@ Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
     if (!result.success || !result.config) {
       throw new Error(result.error ?? 'Invalid chart arguments');
     }
-    return { status: 'success', chartType: result.config.chartType, title: result.config.title };
+    return result.config;
   },
 });

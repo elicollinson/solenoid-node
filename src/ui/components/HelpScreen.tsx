@@ -54,7 +54,7 @@ export function HelpScreen({ onClose }: HelpScreenProps) {
           The Agent
         </Text>
         <Box paddingLeft={2} flexDirection="column">
-          <Text dimColor>One agent with web search, page reading, charts and tables,</Text>
+          <Text dimColor>One agent with web search, page reading and charts,</Text>
           <Text dimColor>plus any MCP servers in settings. Routes fall back in order;</Text>
           <Text dimColor>your messages, web pages and MCP results are screened for injection.</Text>
         </Box>

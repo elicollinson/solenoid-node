@@ -10,7 +10,7 @@ import { Box, Text } from 'ink';
  * Dependencies:
  * - @inkjs/ui: UI component library for Ink (TextInput)
  */
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { uiLogger } from '../../utils/logger.js';
 
 interface ChatInputProps {
@@ -26,23 +26,15 @@ export function ChatInput({
 }: ChatInputProps) {
   const [key, setKey] = useState(0);
 
-  const handleChange = useCallback((value: string) => {
-    uiLogger.trace({ value, length: value.length }, 'ChatInput onChange');
-  }, []);
-
-  const handleSubmit = useCallback(
-    (text: string) => {
-      uiLogger.debug({ text }, 'ChatInput handleSubmit');
-      const trimmed = text.trim();
-      if (trimmed) {
-        onSubmit(trimmed);
-        // Force TextInput to reset by changing its key
-        setKey((k) => k + 1);
-        uiLogger.debug({ newKey: key + 1 }, 'ChatInput key incremented');
-      }
-    },
-    [onSubmit, key]
-  );
+  const handleSubmit = (text: string) => {
+    uiLogger.debug({ text }, 'ChatInput handleSubmit');
+    const trimmed = text.trim();
+    if (trimmed) {
+      onSubmit(trimmed);
+      // Force TextInput to reset by changing its key
+      setKey((k) => k + 1);
+    }
+  };
 
   uiLogger.trace({ key, isDisabled, placeholder }, 'ChatInput render');
 
@@ -52,7 +44,6 @@ export function ChatInput({
       <TextInput
         key={key}
         placeholder={placeholder}
-        onChange={handleChange}
         onSubmit={handleSubmit}
         isDisabled={isDisabled}
       />

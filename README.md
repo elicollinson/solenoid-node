@@ -8,8 +8,9 @@ A single-agent harness with a React terminal UI, built on Bun. It runs Gemma 4 2
 - **Model routes.** An ordered fallback chain: LM Studio first, OpenRouter second. If an attempt fails, the task restarts on the next route. Transient errors retry a bounded number of times first.
 - **Injection screening of untrusted text.** Your messages and every result that comes from outside (web pages, search results, MCP output) are judged by a self-hosted Gemma judge before the model reads them. What happens on a flag depends on who wrote the text (see [Screening](#screening)).
 - **Approval for writes.** A tool that changes something waits for your `y`/`n`. Reads never ask.
-- **Ink terminal UI.** Streaming markdown, tool-status lines, inline charts and tables, a settings editor and slash commands.
-- **Tools.** Brave web search, a web page reader, terminal charts and table artifacts, plus any number of **MCP servers** (stdio or HTTP).
+- **AG-UI 1.0 as the UI contract.** A conversation streams as standard [AG-UI](https://docs.ag-ui.com) events: text, reasoning, tool calls, chart components, approvals as interrupts. Any AG-UI client can draw it; the terminal UI is one.
+- **Ink terminal UI.** Streaming markdown, tool-status lines, inline charts, a settings editor and slash commands.
+- **Tools.** Brave web search, a web page reader, charts, plus any number of **MCP servers** (stdio or HTTP).
 - **Non-interactive mode.** `solenoid --run "<prompt>"` streams the answer to stdout.
 - **OpenTelemetry tracing** with OpenInference spans, with optional W&B Weave export.
 
@@ -61,23 +62,43 @@ The answer goes to stdout. Tool activity and warnings go to stderr. Nobody is pr
 ```
 Terminal UI (src/ui)            CLI --run (src/cli-runner.ts)
             \                     /
-             Session (src/harness/session.ts) ── transcript between turns
+             AG-UI events ── interrupts answered with session.resume()
                          │
-             Agent (src/core/agent.ts)
+             Session (src/harness/session.ts) ── transcript + AG-UI thread
+                         │  encoder (src/harness/ag-ui)
+             Agent (src/core/agent.ts) ── AgentEvents
              ├── routes:    OpenAICompatibleProvider (LM Studio | OpenRouter)
              ├── tools:     built-ins (src/tools) + MCP (src/mcp)
              ├── screen:    solenoid-security createSecurity().screen
-             └── approvals: per-run handler (UI prompt, or --yes)
+             └── approvals: the session's interrupt handler
 ```
 
 `src/harness/factory.ts` builds the agent from settings. `src/core` reads no configuration and no environment: routes, tools, the screen, approvals and logging are all passed in. That makes it usable as a library (`src/index.ts`).
 
+### The UI contract (AG-UI)
+
+`Session.send(text, { onEvent })` streams AG-UI 1.0 events (`@ag-ui/core`), and `applyEvent` (`src/harness/ag-ui/reducer.ts`) folds them into a thread of AG-UI messages. The terminal UI holds its conversation that way, and so can any other client.
+
+| Agent | AG-UI |
+|-------|-------|
+| A turn | `RUN_STARTED` … `RUN_FINISHED`; each model call is a `STEP` |
+| Text, reasoning | `TEXT_MESSAGE_*`, `REASONING_*` |
+| A tool call | `TOOL_CALL_START/ARGS/END`, then `TOOL_CALL_RESULT` with `error`, `quarantined` or `declined` in `metadata.solenoid`; a run that ends first answers its open calls as `not run` |
+| A chart | `ACTIVITY_SNAPSHOT` with `activityType: "solenoid.chart"`; content validated by the schema in `src/display` |
+| A write waiting for approval | `RUN_FINISHED` with an `interrupt` outcome; `session.resume([{ interruptId, status: "resolved", payload: { approved } }])` continues it in a new run |
+| A retry or a route change | `CUSTOM` (`solenoid.retry`, `solenoid.route_advanced`), then `MESSAGES_SNAPSHOT` without the discarded output |
+| A screening flag | `CUSTOM` (`solenoid.guardrail`) |
+
+Each surface draws components from its own catalog (`src/ui/components/catalog.tsx` for the terminal) and skips types it has none for. Tables are markdown in the answer, not a component.
+
 ### The loop
 
-Each turn streams `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, `assistant_turn`, `tool_start`, `tool_end`, `retry`, `route_advanced`, `guardrail`, `usage`), and the UI and CLI render from these. A run returns its transcript so the next message continues the conversation. The transcript includes provider-native payloads, such as OpenRouter's `reasoning_details`.
+The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, `assistant_turn`, `tool_start`, `tool_end`, `retry`, `route_advanced`, `guardrail`, `usage`), which the session encodes as AG-UI. A run returns its transcript so the next message continues the conversation. The transcript includes provider-native payloads, such as OpenRouter's `reasoning_details`.
 
 - **Errors are turns.** A failed or invalid tool call is reported back to the model so it can correct itself.
 - **Reads run together.** The read tools of one turn, and their screens, run concurrently. A write waits for the calls before it.
+- **Display tools are for the person.** A `display` tool (`render_chart`) sends its content to the UI and tells the model only that it was shown. Every display call carries a required `done` flag: the model says when a chart completes its answer, and a turn of display calls that says so ends the run. Content identical to something already shown in the run is not drawn twice.
+- **A turn limit.** `agent.max_turns` (default 25) bounds model calls per attempt; the last is offered no tools.
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
 
@@ -89,7 +110,7 @@ Each turn streams `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_delta`, 
 | Anything of undeclared origin | input | Run stops |
 | Tool results (web pages, search, MCP) | tool output | That output is withheld from the model; run continues |
 
-The model's own text is not screened. That covers its turns and the results of tools that only echo it back: charts and tables. Injected text is caught where it enters, before the model reads it. A tool's `kind` says which it is: `read` and `write` tools reach the world and are screened, while `internal` tools touch only this process and are neither screened nor put to approval. `internal` has to be declared, and MCP tools are never internal.
+The model's own text is not screened. That covers its turns and the results of tools that only echo it back, such as charts. Injected text is caught where it enters, before the model reads it. A tool's `kind` says which it is: `read` and `write` tools reach the world and are screened, while `internal` and `display` tools touch only this process and are neither screened nor put to approval. Both have to be declared, and MCP tools are never either.
 
 Text this repository wrote (tool descriptions, the system prompt) is subtracted before the judge looks. A screen that cannot reach a verdict fails closed. Already-screened history is not re-screened on later turns. Turn screening off with `screening.enabled: false`.
 
@@ -168,11 +189,11 @@ src/
 ├── cli.ts / cli-runner.ts   # CLI entry and --run mode
 ├── index.ts                 # Library entry (core, harness, config)
 ├── core/                    # Agent loop, providers, tools, tracing (no config, no env)
-├── harness/                 # Settings → agent, session, system prompt, messages
-├── tools/                   # Built-in tools (web, chart, artifacts)
+├── harness/                 # Settings → agent, session, AG-UI encoder/reducer, prompt, messages
+├── tools/                   # Built-in tools (web, chart)
 ├── mcp/                     # MCP client manager → AgentTools
 ├── config/                  # Settings schema, loader, editor support
-├── artifacts/ charts/       # Per-turn artifact store, chart parsing
+├── display/                 # Display components: the chart schema and parser
 ├── telemetry/               # Optional W&B Weave export
 └── ui/                      # Ink app, components, test harness
 ```
@@ -184,9 +205,12 @@ src/
 | `bun run dev` | Start with watch mode |
 | `bun run start` | Start the app |
 | `bun test` | Run tests. The real-agent e2e tests run when LM Studio serves the default model |
+| `bun run build` | Bundle `dist/cli.js` for Node, with React Compiler applied |
 | `bun run typecheck` | TypeScript type checking |
 | `bun run lint` | Lint with Biome |
 | `bun run scripts/live-core-smoke.ts` | Two-turn tool conversation on each live backend |
+
+The Ink UI is compiled with [React Compiler](https://react.dev/learn/react-compiler), so components carry no manual `useMemo`, `useCallback` or `memo`. Bun does not run Babel, so `scripts/react-compiler.ts` applies it as a Bun plugin: `bunfig.toml` preloads it for `bun run` and `bun test`, and `scripts/build.ts` uses it for the bundle.
 
 Tracing: set `WANDB_API_KEY` and `WANDB_PROJECT_ID` to export spans to W&B Weave. Structured JSON logs go to `logs/` (agent.log, ui.log, server.log).
 
