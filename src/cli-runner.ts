@@ -72,17 +72,21 @@ export async function runNonInteractive(
       process.stderr.write('· subagents finished\n');
       turn({ signal: controller.signal, onEvent }).then(write, (error) => {
         failed = true;
-        process.stderr.write(`Error: ${describeRunError(error)}\n`);
+        reportError(error);
       });
     });
     write(await session.send(prompt, { signal: controller.signal, onEvent }));
     await session.idle();
     return failed ? 1 : 0;
   } catch (error) {
-    process.stderr.write(`Error: ${describeRunError(error)}\n`);
+    reportError(error);
     return 1;
   } finally {
     await close?.();
     await shutdownTracing();
   }
+}
+
+function reportError(error: unknown): void {
+  process.stderr.write(`Error: ${describeRunError(error)}\n`);
 }

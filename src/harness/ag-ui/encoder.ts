@@ -94,10 +94,10 @@ export class TurnEncoder {
    * a subagent that finished).
    */
   startTurn(opening: { id: string; text: string; role: 'user' | 'developer' }): void {
-    const messageId = opening.id;
+    const { id: messageId, text, role } = opening;
     this.startRun();
-    this.emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: opening.role });
-    this.emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: opening.text });
+    this.emit({ type: EventType.TEXT_MESSAGE_START, messageId, role });
+    this.emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: text });
     this.emit({ type: EventType.TEXT_MESSAGE_END, messageId });
     this.turnStart = this.sink.thread().length;
   }

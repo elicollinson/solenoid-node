@@ -68,8 +68,6 @@ interface Subagent {
   summary?: { covers: number; text: string };
   /** Messages from the parent, sent once the turn it is on ends. */
   inbox: string[];
-  /** The parent's model has seen how it finished: it is not news. */
-  reported: boolean;
 }
 
 interface SubagentManagerOptions {
@@ -79,8 +77,6 @@ interface SubagentManagerOptions {
   createSession: (name: string, tools: AgentTool[], options: SessionOptions) => Session;
   /** Write a summary of a child's work from its task and transcript. */
   summarize: (task: string, transcript: string) => Promise<string>;
-  /** A child finished, and the parent may want to hear of it (`takeNews`). */
-  onFinished?: () => void;
 }
 
 const isActive = (child: Subagent) => child.status === 'queued' || child.status === 'running';
@@ -90,6 +86,9 @@ export class SubagentManager implements Background {
   private readonly queue: Array<() => void> = [];
   private running = 0;
   private next = 1;
+  /** Children that finished, done or failed, and the parent's model has not seen since. */
+  private readonly unseen = new Set<Subagent>();
+  private newsListener: (() => void) | undefined;
 
   constructor(private readonly options: SubagentManagerOptions) {}
 
@@ -126,7 +125,6 @@ export class SubagentManager implements Background {
       controller: new AbortController(),
       settled: Promise.resolve(),
       inbox: [],
-      reported: false,
     };
     this.start(child, task);
     this.children.set(child.id, child);
@@ -142,12 +140,8 @@ export class SubagentManager implements Background {
     const child = this.get(id);
     if (isActive(child)) child.inbox.push(text);
     else {
-      child.controller = new AbortController();
-      child.answer = undefined;
-      child.error = undefined;
-      child.endedAt = undefined;
-      child.reported = false;
-      child.status = 'queued';
+      // The parent is taking it up again, so how it finished is not news.
+      this.unseen.delete(child);
       this.start(child, text);
     }
     return child;
@@ -215,18 +209,26 @@ export class SubagentManager implements Background {
    * cancels one.
    */
   takeNews(): string | undefined {
-    const finished = [...this.children.values()].filter(
-      (c) => !c.reported && (c.status === 'done' || c.status === 'failed')
-    );
+    const finished = [...this.unseen];
     if (!finished.length) return undefined;
-    for (const child of finished) child.reported = true;
-    const heading = finished.map((c) => `${c.name} (${c.id}) ${c.status}`).join(', ');
+    this.unseen.clear();
+    const label = (c: Subagent) => `${c.name} (${c.id})`;
+    const heading = finished.map((c) => `${label(c)} ${c.status}`).join(', ');
     const details = finished.map((c) =>
       c.status === 'done'
-        ? `${c.name} (${c.id}) answered:\n${truncate(c.answer ?? '', NEWS_ANSWER_CHARS, { showLength: true })}`
-        : `${c.name} (${c.id}) failed: ${c.error}`
+        ? `${label(c)} answered:\n${truncate(c.answer ?? '', NEWS_ANSWER_CHARS, { showLength: true })}`
+        : `${label(c)} failed: ${c.error}`
     );
     return `Subagents finished: ${heading}.\n\n${SUBAGENT_NEWS}\n\n${details.join('\n\n')}`;
+  }
+
+  onNews(listener: () => void): void {
+    this.newsListener = listener;
+  }
+
+  /** The parent's model has been shown this child: how it finished is no longer news. */
+  seen(child: Subagent): void {
+    this.unseen.delete(child);
   }
 
   /** Settles once every child has finished, including any a message restarts meanwhile. */
@@ -261,10 +263,17 @@ export class SubagentManager implements Background {
     return subagentTools(this);
   }
 
+  /** Queue a run of `text`, from a fresh start. */
   private start(child: Subagent, text: string): void {
+    child.controller = new AbortController();
+    child.status = 'queued';
+    child.answer = child.error = child.endedAt = undefined;
     child.settled = this.whenFree(child)
       .then((slot) => this.run(child, slot, text))
-      .then(() => this.options.onFinished?.());
+      .then(() => {
+        if (child.status === 'done' || child.status === 'failed') this.unseen.add(child);
+        this.newsListener?.();
+      });
   }
 
   /**
@@ -299,16 +308,13 @@ export class SubagentManager implements Background {
 
   /** Run `text` as a turn, then each message that arrived meanwhile, on one slot. */
   private async run(child: Subagent, slot: boolean, text: string): Promise<void> {
-    if (!slot || child.controller.signal.aborted) {
-      child.status = 'cancelled';
-      child.endedAt = Date.now();
-      child.inbox = [];
-      if (slot) this.release();
-      return;
-    }
-    child.status = 'running';
-    child.startedAt = Date.now();
     try {
+      if (!slot || child.controller.signal.aborted) {
+        child.status = 'cancelled';
+        return;
+      }
+      child.status = 'running';
+      child.startedAt = Date.now();
       for (let next: string | undefined = text; next !== undefined; ) {
         child.answer = await child.session.send(next, {
           signal: child.controller.signal,
@@ -325,11 +331,11 @@ export class SubagentManager implements Background {
     } catch (error) {
       child.status = child.controller.signal.aborted ? 'cancelled' : 'failed';
       child.error = describeRunError(error);
-      child.inbox = [];
     } finally {
       child.endedAt = Date.now();
       child.current = undefined;
-      this.release();
+      child.inbox = [];
+      if (slot) this.release();
     }
   }
 
@@ -339,12 +345,8 @@ export class SubagentManager implements Background {
   }
 }
 
-/**
- * A child as a tool shows it to the parent's model. Showing how one
- * finished means it is no longer news.
- */
+/** A child as a tool shows it to the parent's model. */
 function view(child: Subagent) {
-  if (child.status === 'done' || child.status === 'failed') child.reported = true;
   const elapsed = child.startedAt ? ((child.endedAt ?? Date.now()) - child.startedAt) / 1000 : 0;
   return {
     id: child.id,
@@ -392,6 +394,11 @@ export function subagentToolNames(): string[] {
 
 function subagentTools(manager: SubagentManager): AgentTool[] {
   const id = z.string().describe('The subagent id, such as "sa-1"');
+  /** View a child for a tool that reports how it stands, which makes that no longer news. */
+  const show = (child: Subagent) => {
+    manager.seen(child);
+    return view(child);
+  };
   const tools = [
     defineTool({
       name: 'spawn_subagent',
@@ -417,7 +424,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       description: 'List the subagents this session has started, with their status.',
       kind: 'internal',
       schema: z.object({}),
-      execute: () => ({ subagents: manager.select().map(view) }),
+      execute: () => ({ subagents: manager.select().map(show) }),
     }),
     defineTool({
       name: 'subagent_status',
@@ -428,7 +435,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       execute: ({ id }) => {
         const child = manager.get(id);
         return {
-          ...view(child),
+          ...show(child),
           task: child.task,
           ...(child.answer ? { answer: child.answer } : {}),
         };
@@ -441,7 +448,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       kind: 'internal',
       schema: z.object({ id }),
       execute: async ({ id }, context) => ({
-        ...view(manager.get(id)),
+        ...show(manager.get(id)),
         summary: await context.untimed(manager.summary(id)),
       }),
     }),
@@ -478,7 +485,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
         const finished = await context.untimed(
           manager.wait(children, mode, timeoutSeconds * 1000, context.signal)
         );
-        return { finished, subagents: children.map(view) };
+        return { finished, subagents: children.map(show) };
       },
     }),
     defineTool({
@@ -501,7 +508,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       description: 'Stop a subagent that is queued or running.',
       kind: 'internal',
       schema: z.object({ id }),
-      execute: ({ id }) => view(manager.cancel(id)),
+      execute: ({ id }) => show(manager.cancel(id)),
     }),
   ];
   return tools as AgentTool[];

@@ -8,7 +8,7 @@
  */
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
@@ -238,6 +238,8 @@ function AppContent() {
         addSystemMessage(describeRunError(error));
       })
       .then(() => {
+        // A news turn the session started as this one ended owns the state now.
+        if (abortRef.current !== controller) return;
         abortRef.current = null;
         setOpenApproval(null);
         setIsProcessing(false);
@@ -245,8 +247,9 @@ function AppContent() {
       });
   };
 
-  // Registered again each render, so the session holds this render's handler.
-  useEffect(() => session.onAutoTurn(runTurn));
+  const runAutoTurn = useEffectEvent(runTurn);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an effect event is never a dependency.
+  useEffect(() => session.onAutoTurn((turn) => runAutoTurn(turn)), [session]);
 
   const handleSubmit = (text: string) => {
     uiLogger.info({ text }, 'handleSubmit called');

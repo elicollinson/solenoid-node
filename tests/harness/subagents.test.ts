@@ -25,14 +25,9 @@ const note = defineTool({
 });
 
 /** A manager whose children answer from the given scripts, one per spawn. */
-function managerWith(
-  scripts: Step[][],
-  tools: AgentTool[] = [echo, note],
-  onFinished?: () => void
-) {
+function managerWith(scripts: Step[][], tools: AgentTool[] = [echo, note]) {
   const given: string[][] = [];
   const manager = new SubagentManager({
-    onFinished: () => onFinished?.(),
     tools,
     createSession: (_name, childTools, options) => {
       given.push(childTools.map((t) => t.definition.function.name));
@@ -246,14 +241,13 @@ describe('Subagent news', () => {
       release = resolve;
     });
     const slow: Step = () => gate.then(() => say('The answer is 42.')) as never;
-    let parent!: Session;
-    const { manager } = managerWith([[slow]], [echo], () => parent.notify());
+    const { manager } = managerWith([[slow]], [echo]);
     const provider = new ScriptedProvider('parent', [
       call('spawn_subagent', { name: 'r', task: 'find it' }),
       say('Started a researcher; I will report back.'),
       say('It is 42.'),
     ]);
-    parent = new Session(
+    const parent = new Session(
       new Agent({ routes: [{ client: provider, model: 'm' }], tools: manager.tools() }),
       { background: manager }
     );

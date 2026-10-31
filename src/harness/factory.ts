@@ -200,7 +200,6 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
           options
         ),
       summarize,
-      onFinished: () => session.notify(),
     });
     const agent = makeAgent(
       'solenoid',
