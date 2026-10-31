@@ -49,7 +49,7 @@ import {
   isTransientProviderError,
 } from './providers.js';
 import type { Reviewer } from './reviewer.js';
-import { Deadline, abortReason, awaitWithSignal, waitFor } from './signals.js';
+import { abortReason, awaitWithSignal, waitFor } from './signals.js';
 import { extractJson, validateStructured } from './structured.js';
 import { truncate } from './text.js';
 import {
@@ -156,7 +156,6 @@ interface Attempt {
   schema?: z.ZodType;
   /** Set once a write tool has run. A committed attempt is never replayed. */
   committed: boolean;
-  deadline: Deadline;
   /** Display content already shown this attempt, so an identical call is not drawn twice. */
   shown: Set<string>;
 }
@@ -298,8 +297,9 @@ export class Agent {
         for (let index = 0; index < this.routes.length; index++) {
           const route = this.routes[index]!;
           const controller = new AbortController();
-          const deadline = new Deadline(this.timeoutMs, () =>
-            controller.abort(new AgentTimeoutError(this.timeoutMs))
+          const timer = setTimeout(
+            () => controller.abort(new AgentTimeoutError(this.timeoutMs)),
+            this.timeoutMs
           );
           const signal = AbortSignal.any([external, controller.signal]);
           const attempt: Attempt = {
@@ -310,7 +310,6 @@ export class Agent {
             approve: options.approve,
             schema: options.schema,
             committed: false,
-            deadline,
             shown: new Set(),
           };
           // Each attempt works on its own copy, so a failed trajectory never
@@ -357,7 +356,7 @@ export class Agent {
             this.log.warn({ from, to, error: message }, '[route] attempt failed; advancing route');
             emit({ type: 'route_advanced', from, to, error: message });
           } finally {
-            deadline.clear();
+            clearTimeout(timer);
           }
         }
         throw new AgentRunError('Model route chain was unexpectedly empty');
@@ -714,7 +713,6 @@ export class Agent {
                 commit: () => {
                   attempt.committed = true;
                 },
-                untimed: (promise) => attempt.deadline.hold(promise),
               })
             ),
             attempt.signal

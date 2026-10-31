@@ -88,8 +88,6 @@ export interface ToolContext {
    * is never re-run on another route; writes commit on their own.
    */
   commit(): void;
-  /** Wait on work outside this attempt without spending its deadline. */
-  untimed<T>(promise: Promise<T>): Promise<T>;
 }
 
 export interface AgentTool<S extends z.ZodType = z.ZodType> {

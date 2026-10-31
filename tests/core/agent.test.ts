@@ -667,25 +667,3 @@ describe('Display tools', () => {
     );
   });
 });
-
-describe('Tool context', () => {
-  test('work a tool marks untimed does not spend the attempt deadline', async () => {
-    const slow = defineTool({
-      name: 'slow_lookup',
-      description: 'Look something up slowly.',
-      kind: 'internal',
-      schema: z.object({}),
-      execute: (_args, context) =>
-        context.untimed(new Promise((resolve) => setTimeout(() => resolve('found'), 150))),
-    });
-    const provider = new ScriptedProvider('fake', [call('slow_lookup', {}), say('Done.')]);
-    const agent = new Agent({
-      routes: [{ client: provider, model: 'm' }],
-      tools: [slow],
-      timeoutMs: 100,
-    });
-
-    expect(await agent.run('go')).toBe('Done.');
-  });
-});
-

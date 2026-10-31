@@ -14,13 +14,13 @@
  *
  * A child runs with the parent's tools, or a subset named at spawn, never
  * the subagent tools themselves: depth stays at one. At most a few run at
- * once and the rest queue, since a local model serves one request at a
- * time and a queued request would spend its deadline waiting. Nobody can
+ * once and the rest queue, since a local model's request slots and context
+ * are shared, and a request waiting on the server spends its timeout. Nobody can
  * approve a child's writes yet, so they are declined as unattended.
  */
 import { type Message, contentToText } from '@ag-ui/core';
 import { z } from 'zod';
-import { type AgentTool, type ApprovalRequest, defineTool, truncate } from '../core/index.js';
+import { type AgentTool, defineTool, truncate } from '../core/index.js';
 import { parseToolArgs, toolStatus } from './ag-ui/reducer.js';
 import { describeRunError } from './messages.js';
 import { SUBAGENT_NEWS, SUBAGENT_STARTED, SUBAGENT_STATUS } from './prompt.js';
@@ -57,8 +57,6 @@ interface Subagent {
   /** The tool it is running now, if any. */
   current?: string;
   steps: number;
-  /** Writes it asked for and could not be allowed. */
-  declined: string[];
   session: Session;
   controller: AbortController;
   /** Settles when it has finished, however it finished. */
@@ -114,7 +112,6 @@ export class SubagentManager implements Background {
       ? toolNames.map((n) => available.get(n)!)
       : [...available.values()];
 
-    const declined: string[] = [];
     const child: Subagent = {
       id: `sa-${this.next++}`,
       name,
@@ -122,13 +119,8 @@ export class SubagentManager implements Background {
       tools: tools.map((t) => t.definition.function.name),
       status: 'queued',
       steps: 0,
-      declined,
-      session: this.options.createSession(name, tools, {
-        approve: (request: ApprovalRequest) => {
-          declined.push(request.tool);
-          return declineUnattended(request);
-        },
-      }),
+      // Nobody can approve a child's writes: it is told each was declined, and says so.
+      session: this.options.createSession(name, tools, { approve: declineUnattended }),
       controller: new AbortController(),
       settled: Promise.resolve(),
       inbox: [],
@@ -157,7 +149,7 @@ export class SubagentManager implements Background {
   /** A child queued or running on this task already: a repeat spawn gets it, not a second one. */
   underWay(task: string): Subagent | undefined {
     const key = taskKey(task);
-    return this.select().find((c) => isActive(c) && taskKey(c.task) === key);
+    return this.all().find((c) => isActive(c) && taskKey(c.task) === key);
   }
 
   get(id: string): Subagent {
@@ -169,9 +161,9 @@ export class SubagentManager implements Background {
     return child;
   }
 
-  /** The named children, or all of them. */
-  select(ids?: string[]): Subagent[] {
-    return ids?.length ? ids.map((id) => this.get(id)) : [...this.children.values()];
+  /** Every child this session has started, oldest first. */
+  all(): Subagent[] {
+    return [...this.children.values()];
   }
 
   cancel(id: string): Subagent {
@@ -216,14 +208,14 @@ export class SubagentManager implements Background {
    * come as a message.
    */
   status(): string | undefined {
-    const active = this.select().filter(isActive);
+    const active = this.all().filter(isActive);
     if (!active.length) return undefined;
     const lines = active.map((c) => {
       const doing = c.current ? `, running ${c.current}` : '';
       const task = truncate(c.task, STATUS_TASK_CHARS);
       return `- ${label(c)}: ${c.status}, ${elapsedSeconds(c)}s, ${c.steps} steps${doing}. Task: ${task}`;
     });
-    const finished = this.select().filter((c) => !isActive(c));
+    const finished = this.all().filter((c) => !isActive(c));
     if (finished.length) {
       lines.push(`Finished: ${finished.map((c) => `${label(c)} ${c.status}`).join(', ')}.`);
     }
@@ -233,7 +225,7 @@ export class SubagentManager implements Background {
   /** Settles once every child has finished, including any a message restarts meanwhile. */
   async idle(): Promise<void> {
     for (;;) {
-      const active = this.select().filter(isActive);
+      const active = this.all().filter(isActive);
       if (!active.length) return;
       await Promise.all(active.map((c) => c.settled));
     }
@@ -349,16 +341,12 @@ function elapsedSeconds(child: Subagent): number {
   return Math.round(ms / 1000);
 }
 
-/** A child as a tool shows it to the parent's model. */
+/** A child as a tool's result names it; how it is getting on is in the status block. */
 function view(child: Subagent) {
   return {
     id: child.id,
     name: child.name,
     status: child.status,
-    elapsedSeconds: elapsedSeconds(child),
-    steps: child.steps,
-    ...(child.current ? { running: child.current } : {}),
-    ...(child.declined.length ? { declinedWrites: child.declined } : {}),
     ...(child.error ? { error: child.error } : {}),
   };
 }
@@ -441,10 +429,10 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
         "A short written summary of a finished subagent's work: what it did, found and could not do.",
       kind: 'internal',
       schema: z.object({ id }),
-      execute: async ({ id }, context) =>
+      execute: async ({ id }) =>
         stillAtWork(manager.get(id)) ?? {
           ...view(manager.get(id)),
-          summary: await context.untimed(manager.summary(id)),
+          summary: await manager.summary(id),
         },
     }),
     defineTool({

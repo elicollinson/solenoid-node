@@ -136,8 +136,8 @@ export interface Harness {
   warnings: string[];
   /**
    * A new conversation. With `canSpawn`, its agent also holds the subagent
-   * tools and can start child sessions, which never can themselves; a child
-   * that finishes unwatched starts a turn (Session.onAutoTurn).
+   * tools and can start child sessions, which never can themselves; each
+   * child that finishes starts a turn with its result (Session.onAutoTurn).
    * `approve` replaces the approval interrupts (see SessionOptions).
    */
   createSession(options?: { canSpawn?: boolean; approve?: ApprovalHandler }): Session;

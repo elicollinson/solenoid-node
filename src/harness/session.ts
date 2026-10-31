@@ -69,8 +69,9 @@ export interface SessionOptions {
 /** Work a session runs beside the conversation: its subagents. */
 export interface Background {
   /**
-   * News the model has not seen yet, taken once: a later call does not
-   * return it again. Undefined when there is none.
+   * What has happened that the model has not been told yet (subagents that
+   * finished), taken once: a later call does not return it again.
+   * Undefined when there is none.
    */
   takeNews(): string | undefined;
   /** Settles once no work is left that could make news. */

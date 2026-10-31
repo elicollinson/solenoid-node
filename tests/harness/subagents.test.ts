@@ -27,11 +27,7 @@ const note = defineTool({
 /** Run one of the manager's tools as the parent's model would. */
 function runTool(manager: SubagentManager, name: string, args: Record<string, unknown>) {
   const tool = manager.tools().find((t) => t.definition.function.name === name)!;
-  return tool.execute(args, {
-    signal: new AbortController().signal,
-    commit: () => {},
-    untimed: (p) => p,
-  });
+  return tool.execute(args, { signal: new AbortController().signal, commit: () => {} });
 }
 
 /** A manager whose children answer from the given scripts, one per spawn. */
@@ -85,7 +81,6 @@ describe('SubagentManager', () => {
     await manager.idle();
     const child = manager.get('sa-1');
     expect(child.status).toBe('done');
-    expect(child.declined).toHaveLength(1);
     const result = child.session.messages.find((m) => m.role === 'tool');
     expect(String(result?.content)).toContain('unattended');
   });
@@ -149,7 +144,7 @@ describe('Subagent tools in the loop', () => {
 
     await expect(parent.run('go')).rejects.toThrow('route broke');
     expect(second.calls).toHaveLength(0);
-    expect(manager.select()).toHaveLength(1);
+    expect(manager.all()).toHaveLength(1);
   });
 });
 
