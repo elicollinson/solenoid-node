@@ -18,7 +18,10 @@ import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
-import { CUSTOM_EVENTS } from '../../harness/ag-ui/encoder.js';
+// Not harness/index.js, which would load the whole harness (MCP, providers,
+// screening) into every mock-agent test.
+import { CUSTOM_EVENTS, customValue } from '../../harness/ag-ui/encoder.js';
+import { approvalAnswer } from '../../harness/session.js';
 import { MockAgent } from './mock-agent.js';
 import type {
   AgentEvent,
@@ -110,21 +113,15 @@ class RealAgentWrapper implements AgentInterface {
             case EventType.TOOL_CALL_RESULT:
               push({ type: 'tool_end', toolCallId: event.toolCallId });
               break;
-            case EventType.CUSTOM:
-              if (event.name === CUSTOM_EVENTS.routeAdvanced) {
-                push({ type: 'status', content: `Switching to ${event.value.to.provider}` });
-              }
+            case EventType.CUSTOM: {
+              const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
+              if (route) push({ type: 'status', content: `Switching to ${route.to.provider}` });
               break;
+            }
             case EventType.RUN_FINISHED:
               // Tests run unattended with every write allowed.
               if (event.outcome?.type === 'interrupt') {
-                session.resume(
-                  event.outcome.interrupts.map((i) => ({
-                    interruptId: i.id,
-                    status: 'resolved' as const,
-                    payload: { approved: true },
-                  }))
-                );
+                session.resume(event.outcome.interrupts.map((i) => approvalAnswer(i.id, 'allow')));
               }
               break;
           }

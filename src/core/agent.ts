@@ -709,7 +709,13 @@ export class Agent {
             if (!result || typeof result !== 'object' || Array.isArray(result)) {
               throw new Error('a display tool must return an object of component content');
             }
-            attempt.emit({ type: 'display', id, name, content: result as Record<string, unknown> });
+            attempt.emit({
+              type: 'display',
+              id,
+              name,
+              component: tool.component!,
+              content: result as Record<string, unknown>,
+            });
             span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(result));
             return { ok: true, output: DISPLAY_NOTICE };
           }

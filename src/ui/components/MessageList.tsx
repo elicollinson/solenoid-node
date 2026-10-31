@@ -17,7 +17,7 @@ import { ActivityView } from './catalog.js';
 export interface ToolCall {
   id: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'running' | 'completed' | 'error';
   result?: string;
   args?: Record<string, unknown>;
 }
@@ -31,9 +31,9 @@ export type MessagePart =
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
-  content: string; // Keep for backward compat / simple messages
+  content: string;
   isStreaming?: boolean;
-  parts?: MessagePart[]; // Interleaved content
+  parts?: MessagePart[];
   /** The model's reasoning for the turn in progress, when display.show_reasoning is on. */
   reasoning?: string;
   wasInterrupted?: boolean;
@@ -45,14 +45,15 @@ interface MessageListProps {
 }
 
 const statusIcons = {
-  pending: '○',
   running: '◐',
   completed: '●',
   error: '✗',
 } as const;
 
+const roleColors = { user: 'green', assistant: 'cyan', system: 'yellow' } as const;
+const roleLabels = { user: 'You', assistant: 'Solenoid', system: 'System' } as const;
+
 const statusColors = {
-  pending: 'gray',
   running: 'yellow',
   completed: 'green',
   error: 'red',
@@ -77,18 +78,6 @@ function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
 // Memoized: a streaming delta replaces only the message in progress, so
 // finished messages (and their charts) are not re-rendered per token.
 const MessageBubble = memo(function MessageBubble({ message }: { message: Message }) {
-  const roleColors = {
-    user: 'green',
-    assistant: 'cyan',
-    system: 'yellow',
-  } as const;
-
-  const roleLabels = {
-    user: 'You',
-    assistant: 'Solenoid',
-    system: 'System',
-  } as const;
-
   const label = roleLabels[message.role];
 
   // Render text content - raw while streaming, markdown when complete

@@ -26,6 +26,7 @@ Chart types:
 
 Colors: red, green, blue, yellow, cyan, magenta, white, gray.`,
   kind: 'display',
+  component: 'solenoid.chart',
   schema: z.object({
     chartType: z
       .enum(['bar', 'stackedBar', 'line', 'sparkline'])

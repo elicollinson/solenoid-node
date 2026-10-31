@@ -23,8 +23,3 @@ export const COMPONENTS = {
 } satisfies Record<string, z.ZodType>;
 
 export type ComponentType = keyof typeof COMPONENTS;
-
-/** Which component each display tool's content is. */
-export const DISPLAY_TOOL_COMPONENTS: Record<string, ComponentType> = {
-  render_chart: 'solenoid.chart',
-};

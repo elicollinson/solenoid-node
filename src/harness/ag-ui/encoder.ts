@@ -23,10 +23,11 @@ import {
   EventType,
   type Interrupt,
   type Message,
+  type RunFinishedOutcome,
   type TokenUsage,
+  aggregateTokenUsage,
 } from '@ag-ui/core';
 import type { AgentEvent, RouteRef } from '../../core/index.js';
-import { DISPLAY_TOOL_COMPONENTS } from '../../display/index.js';
 import { SOLENOID_METADATA_KEY, type ToolResultMetadata } from './reducer.js';
 
 /** Custom event names, for what AG-UI has no event of its own for. */
@@ -35,6 +36,32 @@ export const CUSTOM_EVENTS = {
   routeAdvanced: 'solenoid.route_advanced',
   guardrail: 'solenoid.guardrail',
 } as const;
+
+/**
+ * The `value` of each custom event: part of the contract, so built here
+ * field by field rather than passing the core's own event through.
+ */
+export interface CustomEventValues {
+  [CUSTOM_EVENTS.retry]: { error: string; delayMs: number };
+  [CUSTOM_EVENTS.routeAdvanced]: { from: RouteRef; to: RouteRef; error: string };
+  [CUSTOM_EVENTS.guardrail]: {
+    boundary: 'input' | 'tool_output';
+    decision: 'allow' | 'observe' | 'quarantine' | 'block';
+    score?: number;
+  };
+}
+
+export type CustomEventName = keyof CustomEventValues;
+
+/** A CUSTOM event's value, typed by its name, or undefined for any other event. */
+export function customValue<N extends CustomEventName>(
+  event: AGUIEvent,
+  name: N
+): CustomEventValues[N] | undefined {
+  return event.type === EventType.CUSTOM && event.name === name
+    ? (event.value as CustomEventValues[N])
+    : undefined;
+}
 
 export interface EncoderSink {
   /** Deliver one event. The session applies it to its thread before passing it on. */
@@ -45,8 +72,8 @@ export interface EncoderSink {
 
 export class TurnEncoder {
   private runId: string | undefined;
-  /** Thread length when the turn began, after the person's message: a route change rolls back to here. */
-  private readonly turnStart: number;
+  /** Thread length after the person's message: a route change rolls back to here. */
+  private turnStart = 0;
   /** Thread length when the current model call began: a retry rolls back to here. */
   private stepStart = 0;
   private step = 0;
@@ -54,17 +81,20 @@ export class TurnEncoder {
   private textOpen = false;
   private reasoningId: string | undefined;
   private route: RouteRef | undefined;
-  private readonly usage = new Map<string, TokenUsage>();
+  private usage: TokenUsage[] = [];
 
   constructor(
     private readonly threadId: string,
     private readonly sink: EncoderSink
-  ) {
-    this.turnStart = sink.thread().length;
-  }
+  ) {}
 
-  get open(): boolean {
-    return this.runId !== undefined;
+  /** Open the turn's first run with the person's message in it. */
+  startTurn(user: { id: string; text: string }): void {
+    this.startRun();
+    this.emit({ type: EventType.TEXT_MESSAGE_START, messageId: user.id, role: 'user' });
+    this.emit({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: user.id, delta: user.text });
+    this.emit({ type: EventType.TEXT_MESSAGE_END, messageId: user.id });
+    this.turnStart = this.sink.thread().length;
   }
 
   /** Open a run: at the start of the turn, and again after each answered interrupt. */
@@ -140,13 +170,15 @@ export class TurnEncoder {
         this.emit({
           type: EventType.ACTIVITY_SNAPSHOT,
           messageId: `${event.id}:display`,
-          activityType: DISPLAY_TOOL_COMPONENTS[event.name] ?? `solenoid.${event.name}`,
+          activityType: event.component,
           content: event.content,
           replace: true,
         });
         break;
 
       case 'tool_end': {
+        // The event has no error field of its own; the reducer moves this
+        // one onto the tool message's native `error`.
         const outcome: ToolResultMetadata = {
           durationMs: event.durationMs,
           ...(event.error ? { error: event.error } : {}),
@@ -166,38 +198,39 @@ export class TurnEncoder {
 
       case 'retry':
         this.closeStep();
-        this.emit({ type: EventType.CUSTOM, name: CUSTOM_EVENTS.retry, value: event });
+        this.custom(CUSTOM_EVENTS.retry, { error: event.error, delayMs: event.delayMs });
         this.snapshot(this.stepStart);
         break;
 
       case 'route_advanced':
         this.closeStep();
-        this.emit({ type: EventType.CUSTOM, name: CUSTOM_EVENTS.routeAdvanced, value: event });
+        this.custom(CUSTOM_EVENTS.routeAdvanced, {
+          from: event.from,
+          to: event.to,
+          error: event.error,
+        });
         this.snapshot(this.turnStart);
-        this.usage.clear();
+        this.usage = [];
         break;
 
       case 'guardrail':
-        this.emit({ type: EventType.CUSTOM, name: CUSTOM_EVENTS.guardrail, value: event });
-        break;
-
-      case 'usage': {
-        const key = `${this.route?.provider}:${this.route?.model}`;
-        const total = this.usage.get(key) ?? {
-          provider: this.route?.provider,
-          model: this.route?.model,
-        };
-        this.usage.set(key, {
-          ...total,
-          inputTokens: (total.inputTokens ?? 0) + (event.usage.promptTokens ?? 0),
-          outputTokens: (total.outputTokens ?? 0) + (event.usage.completionTokens ?? 0),
-          totalTokens: (total.totalTokens ?? 0) + (event.usage.totalTokens ?? 0),
-          ...(event.usage.reasoningTokens != null
-            ? { reasoningTokens: (total.reasoningTokens ?? 0) + event.usage.reasoningTokens }
-            : {}),
+        this.custom(CUSTOM_EVENTS.guardrail, {
+          boundary: event.boundary,
+          decision: event.decision,
+          ...(event.score !== undefined ? { score: event.score } : {}),
         });
         break;
-      }
+
+      case 'usage':
+        this.usage.push({
+          provider: this.route?.provider,
+          model: this.route?.model,
+          inputTokens: event.usage.promptTokens,
+          outputTokens: event.usage.completionTokens,
+          totalTokens: event.usage.totalTokens,
+          reasoningTokens: event.usage.reasoningTokens,
+        });
+        break;
     }
   }
 
@@ -231,7 +264,7 @@ export class TurnEncoder {
     });
   }
 
-  private finish(outcome: Extract<AGUIEvent, { type: EventType.RUN_FINISHED }>['outcome']): void {
+  private finish(outcome: RunFinishedOutcome): void {
     const runId = this.runId;
     if (!runId) return;
     // Closed before the event goes out: a client may answer an interrupt
@@ -242,12 +275,17 @@ export class TurnEncoder {
       threadId: this.threadId,
       runId,
       outcome,
-      ...(outcome?.type === 'interrupt' ? {} : this.usagePayload()),
+      ...(outcome.type === 'interrupt' ? {} : this.usagePayload()),
     });
   }
 
   private usagePayload(): { usage?: TokenUsage[] } {
-    return this.usage.size ? { usage: [...this.usage.values()] } : {};
+    const usage = aggregateTokenUsage(this.usage);
+    return usage.length ? { usage } : {};
+  }
+
+  private custom<N extends CustomEventName>(name: N, value: CustomEventValues[N]): void {
+    this.emit({ type: EventType.CUSTOM, name, value });
   }
 
   private snapshot(length: number): void {

@@ -13,6 +13,7 @@
 import {
   type AGUIEvent,
   type ActivityMessage,
+  type ToolCall as AgUiToolCall,
   type AssistantMessage,
   EventType,
   type Message,
@@ -23,7 +24,11 @@ import {
 /** Where Solenoid keeps its own fields in AG-UI metadata. */
 export const SOLENOID_METADATA_KEY = 'solenoid';
 
-/** What a tool result's metadata says beyond its content. */
+/**
+ * What a tool result's metadata says beyond its content. `error` rides here
+ * on TOOL_CALL_RESULT, which has no field for it, and lands on the tool
+ * message's native `error`.
+ */
 export interface ToolResultMetadata {
   /** The plain failure message, when the call failed. */
   error?: string;
@@ -34,8 +39,51 @@ export interface ToolResultMetadata {
   durationMs?: number;
 }
 
-export function toolResultMetadata(message: ToolMessage): ToolResultMetadata {
-  return (message.metadata?.[SOLENOID_METADATA_KEY] as ToolResultMetadata | undefined) ?? {};
+function resultMetadata(metadata: Record<string, unknown> | undefined): ToolResultMetadata {
+  return (metadata?.[SOLENOID_METADATA_KEY] as ToolResultMetadata | undefined) ?? {};
+}
+
+export type ToolStatus =
+  | { status: 'running' }
+  | { status: 'completed' }
+  | { status: 'failed'; reason: string };
+
+/**
+ * Where a tool call stands, from its result message (absent while it runs).
+ * Shared so every client words an outcome the same way.
+ */
+export function toolStatus(result: ToolMessage | undefined): ToolStatus {
+  if (!result) return { status: 'running' };
+  const meta = resultMetadata(result.metadata);
+  if (meta.quarantined) {
+    return { status: 'failed', reason: 'output blocked: possible prompt injection' };
+  }
+  if (meta.declined) return { status: 'failed', reason: 'declined' };
+  if (result.error) return { status: 'failed', reason: result.error };
+  return { status: 'completed' };
+}
+
+/** A tool call in the thread, with the assistant message that made it. */
+export function findToolCall(
+  thread: readonly Message[],
+  toolCallId: string
+): AgUiToolCall | undefined {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i]!;
+    const call = m.role === 'assistant' ? m.toolCalls?.find((c) => c.id === toolCallId) : undefined;
+    if (call) return call;
+  }
+  return undefined;
+}
+
+/** A tool call's arguments as an object; text that is not one comes back as `{ raw }`. */
+export function parseToolArgs(json: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(json || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : { value };
+  } catch {
+    return { raw: json };
+  }
 }
 
 export function applyEvent(thread: readonly Message[], event: AGUIEvent): Message[] {
@@ -44,15 +92,18 @@ export function applyEvent(thread: readonly Message[], event: AGUIEvent): Messag
       return [...event.messages];
 
     case EventType.TEXT_MESSAGE_START:
-      return upsert(thread, event.messageId, (existing) =>
-        existing?.role === 'assistant'
-          ? existing
-          : { id: event.messageId, role: 'assistant', content: '' }
-      );
+      return upsert(thread, event.messageId, (existing) => {
+        if (existing) return existing;
+        return event.role === 'user'
+          ? { id: event.messageId, role: 'user', content: '' }
+          : { id: event.messageId, role: 'assistant', content: '' };
+      });
 
     case EventType.TEXT_MESSAGE_CONTENT:
       return update(thread, event.messageId, (m) =>
-        m.role === 'assistant' ? { ...m, content: (m.content ?? '') + event.delta } : m
+        m.role === 'assistant' || (m.role === 'user' && typeof m.content === 'string')
+          ? { ...m, content: (m.content ?? '') + event.delta }
+          : m
       );
 
     case EventType.REASONING_MESSAGE_START:
@@ -93,14 +144,14 @@ export function applyEvent(thread: readonly Message[], event: AGUIEvent): Messag
       }));
 
     case EventType.TOOL_CALL_RESULT: {
-      const meta = event.metadata?.[SOLENOID_METADATA_KEY] as ToolResultMetadata | undefined;
+      const { error, ...rest } = resultMetadata(event.metadata);
       const result: ToolMessage = {
         id: event.messageId,
         role: 'tool',
         toolCallId: event.toolCallId,
         content: event.content,
-        ...(meta?.error ? { error: meta.error } : {}),
-        ...(event.metadata ? { metadata: event.metadata } : {}),
+        ...(error ? { error } : {}),
+        metadata: { ...event.metadata, [SOLENOID_METADATA_KEY]: rest },
       };
       return upsert(thread, event.messageId, () => result);
     }
@@ -131,7 +182,7 @@ function upsert(
   id: string,
   build: (existing: Message | undefined) => Message
 ): Message[] {
-  const index = thread.findIndex((m) => m.id === id);
+  const index = thread.findLastIndex((m) => m.id === id);
   if (index === -1) return [...thread, build(undefined)];
   const next = [...thread];
   next[index] = build(thread[index]);
@@ -144,21 +195,19 @@ function update(
   id: string,
   change: (message: Message) => Message
 ): Message[] {
-  const index = thread.findIndex((m) => m.id === id);
+  const index = thread.findLastIndex((m) => m.id === id);
   if (index === -1) return thread as Message[];
   const next = [...thread];
   next[index] = change(thread[index]!);
   return next;
 }
 
-type ToolCallEntry = NonNullable<AssistantMessage['toolCalls']>[number];
-
 function mapToolCall(
   thread: readonly Message[],
   toolCallId: string,
-  change: (call: ToolCallEntry) => ToolCallEntry
+  change: (call: AgUiToolCall) => AgUiToolCall
 ): Message[] {
-  const index = thread.findIndex(
+  const index = thread.findLastIndex(
     (m) => m.role === 'assistant' && m.toolCalls?.some((c) => c.id === toolCallId)
   );
   if (index === -1) return thread as Message[];

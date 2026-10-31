@@ -133,31 +133,6 @@ describe('MessageList', () => {
     expect(lastFrame()).toContain('Message 9');
   });
 
-  it('renders tool call with pending status', () => {
-    const messages: Message[] = [
-      {
-        id: '1',
-        role: 'assistant',
-        content: '',
-        parts: [
-          {
-            type: 'tool_call',
-            toolCall: {
-              id: 'tc-1',
-              name: 'search_web',
-              status: 'pending',
-            },
-          },
-        ],
-      },
-    ];
-
-    const { lastFrame } = render(<MessageList messages={messages} />);
-
-    expect(lastFrame()).toContain('search_web');
-    expect(lastFrame()).toContain('○'); // Pending status icon
-  });
-
   it('renders tool call with running status', () => {
     const messages: Message[] = [
       {

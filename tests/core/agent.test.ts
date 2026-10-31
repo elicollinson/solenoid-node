@@ -520,6 +520,7 @@ describe('Display tools', () => {
     name: 'show_thing',
     description: 'Show a thing.',
     kind: 'display',
+    component: 'test.thing',
     schema: z.object({ label: z.string() }),
     execute: ({ label }) => ({ label }),
   });
@@ -544,6 +545,7 @@ describe('Display tools', () => {
       type: 'display',
       id: 'd1',
       name: 'show_thing',
+      component: 'test.thing',
       content: { label: 'x' },
     });
     expect(result.messages.at(-1)).toMatchObject({ role: 'tool', content: 'Shown to the person in the chat.' });
@@ -565,6 +567,7 @@ describe('Display tools', () => {
       name: 'show_broken',
       description: 'Broken.',
       kind: 'display',
+      component: 'test.broken',
       schema: z.object({}),
       execute: () => 'not an object',
     });

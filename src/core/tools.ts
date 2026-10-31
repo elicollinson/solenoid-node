@@ -39,9 +39,9 @@ export interface FunctionToolDefinition {
  *   its output is not screened, and with nothing outside to change it never
  *   asks.
  * - `display`: an internal tool whose result is for the person, not the
- *   model: a chart, a table. What `execute` returns is the component's
- *   content, reported as a `display` event; the model is told only that it
- *   was shown. A turn that answers and only displays ends the run, since the
+ *   model, such as a chart. What `execute` returns is the content of the
+ *   tool's `component`, reported as a `display` event; the model is told
+ *   only that it was shown. A turn that answers and only displays ends the run, since the
  *   model has nothing new to read.
  *
  * `internal` and `display` must be claimed, and only when no byte of the
@@ -80,6 +80,8 @@ export interface ToolContext {
 export interface AgentTool<S extends z.ZodType = z.ZodType> {
   definition: FunctionToolDefinition;
   kind: AgentToolKind;
+  /** A display tool's component type, which a surface draws its content with. */
+  component?: string;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }
@@ -89,9 +91,16 @@ export function defineTool<S extends z.ZodType>(config: {
   description: string;
   /** Required: an unclassified tool would have to be assumed a write. */
   kind: AgentToolKind;
+  /** Required for a display tool: the component type its content is. */
+  component?: string;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
 }): AgentTool<S> {
+  if ((config.kind === 'display') !== Boolean(config.component)) {
+    throw new Error(
+      `Tool "${config.name}": a display tool, and only a display tool, names a component`
+    );
+  }
   // Every description reaching this function is a literal in this repository,
   // which is the licence for registering it as authored text: the injection
   // screen subtracts it before looking, so our own imperative tool prose is
@@ -101,6 +110,7 @@ export function defineTool<S extends z.ZodType>(config: {
   authoredText.offer(`tool:${config.name}`, config.description);
   return {
     kind: config.kind,
+    ...(config.component ? { component: config.component } : {}),
     schema: config.schema,
     execute: config.execute,
     definition: {

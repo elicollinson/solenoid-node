@@ -34,6 +34,9 @@ describe('Session (AG-UI)', () => {
 
     expect(types(events)).toEqual([
       EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
       EventType.STEP_STARTED,
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
@@ -60,12 +63,9 @@ describe('Session (AG-UI)', () => {
     const session = new Session(
       new Agent({ routes: [{ client: provider, model: 'm' }], tools: [renderChartTool] })
     );
-    let client = [{ id: 'u1', role: 'user' as const, content: 'chart' }] as ReturnType<
-      typeof applyEvent
-    >;
+    let client: ReturnType<typeof applyEvent> = [];
 
     await session.send('chart', {
-      messageId: 'u1',
       onEvent: (e) => {
         client = applyEvent(client, e);
       },

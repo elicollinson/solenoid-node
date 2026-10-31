@@ -8,7 +8,14 @@ import { EventType } from '@ag-ui/core';
  * unless `--yes` was given.
  */
 import { loadSettings } from './config/index.js';
-import { CUSTOM_EVENTS, Session, createHarness, describeRunError } from './harness/index.js';
+import {
+  CUSTOM_EVENTS,
+  Session,
+  approvalAnswer,
+  createHarness,
+  customValue,
+  describeRunError,
+} from './harness/index.js';
 import { initTracing, shutdownTracing } from './telemetry/index.js';
 import { setupErrorHandlers, uiLogger } from './utils/logger.js';
 
@@ -44,18 +51,15 @@ export async function runNonInteractive(
     const answer = await session.send(prompt, {
       signal: controller.signal,
       onEvent: (event) => {
+        const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
         if (event.type === EventType.TOOL_CALL_START) {
           process.stderr.write(`· ${event.toolCallName}\n`);
-        } else if (event.type === EventType.CUSTOM && event.name === CUSTOM_EVENTS.routeAdvanced) {
-          process.stderr.write(
-            `${event.value.from.provider} failed; retrying on ${event.value.to.provider}\n`
-          );
+        } else if (route) {
+          process.stderr.write(`${route.from.provider} failed; retrying on ${route.to.provider}\n`);
         } else if (event.type === EventType.RUN_FINISHED && event.outcome?.type === 'interrupt') {
           session.resume(
-            event.outcome.interrupts.map((interrupt) =>
-              options.yes
-                ? { interruptId: interrupt.id, status: 'resolved', payload: { approved: true } }
-                : { interruptId: interrupt.id, status: 'cancelled' }
+            event.outcome.interrupts.map((i) =>
+              approvalAnswer(i.id, options.yes ? 'allow' : 'unattended')
             )
           );
         }

@@ -30,7 +30,7 @@ import { declinedMessage, describeRunError } from './messages.js';
 export const APPROVAL_REASON = 'tool_approval';
 
 /** What an approval interrupt expects back: `{ approved: boolean }`. */
-export const APPROVAL_RESPONSE_SCHEMA = {
+const APPROVAL_RESPONSE_SCHEMA = {
   type: 'object',
   properties: { approved: { type: 'boolean' } },
   required: ['approved'],
@@ -40,8 +40,19 @@ export interface SendOptions {
   /** Every AG-UI event of the turn, in order. */
   onEvent: (event: AGUIEvent) => void;
   signal?: AbortSignal;
-  /** The id of the person's message in the thread, when the client has already drawn it. */
-  messageId?: string;
+}
+
+/**
+ * The answer to an approval interrupt: allowed, declined by the person, or
+ * left unanswered because nobody is there to ask (an unattended run).
+ */
+export function approvalAnswer(
+  interruptId: string,
+  answer: 'allow' | 'decline' | 'unattended'
+): ResumeEntry {
+  return answer === 'unattended'
+    ? { interruptId, status: 'cancelled' }
+    : { interruptId, status: 'resolved', payload: { approved: answer === 'allow' } };
 }
 
 export class Session {
@@ -57,20 +68,13 @@ export class Session {
     return this.thread;
   }
 
-  /** Interrupts waiting for an answer. */
-  get waiting(): string[] {
-    return [...this.pending.keys()];
-  }
-
   /**
    * Run one turn. Resolves once the agent has answered, across any
    * interrupts in between; rejects with the error that ended it, after the
    * stream has reported it (RUN_ERROR, or a cancelled RUN_FINISHED).
    */
-  async send(text: string, { onEvent, signal, messageId }: SendOptions): Promise<string> {
+  async send(text: string, { onEvent, signal }: SendOptions): Promise<string> {
     const user: ChatMessage = { role: 'user', content: text, origin: 'operator' };
-    const id = messageId ?? crypto.randomUUID();
-    this.thread = [...this.thread, { id, role: 'user', content: text }];
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
@@ -79,7 +83,9 @@ export class Session {
       thread: () => this.thread,
     });
 
-    encoder.startRun();
+    // Synchronous up to the agent's first await, so a client draws the
+    // person's message the moment it calls send.
+    encoder.startTurn({ id: crypto.randomUUID(), text });
     try {
       const result = await this.agent.runMessages([...this.transcript, user], {
         signal,
@@ -147,11 +153,7 @@ export class Session {
   }
 }
 
-/**
- * A resolved answer with `approved: true` allows the call. Anything else
- * declines it: "resolved" with `approved: false` is a person saying no;
- * "cancelled" means nobody answered, as in an unattended run.
- */
+/** The reading of `approvalAnswer`: only a resolved `approved: true` allows the call. */
 function verdictFor(entry: ResumeEntry, tool: string): ToolVerdict {
   if (entry.status === 'resolved' && (entry.payload as { approved?: unknown })?.approved === true) {
     return { allow: true };
