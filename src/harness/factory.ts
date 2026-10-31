@@ -21,6 +21,7 @@ import {
 } from '../config/index.js';
 import {
   Agent,
+  type AgentTool,
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
@@ -30,7 +31,15 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
-import { DEFAULT_SYSTEM_PROMPT, withToday } from './prompt.js';
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  SUBAGENT_GUIDE,
+  SUBAGENT_ROLE,
+  SUMMARIZER_PROMPT,
+  withToday,
+} from './prompt.js';
+import { Session } from './session.js';
+import { SubagentManager } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
 const LMSTUDIO_PLACEHOLDER_KEY = 'lm-studio';
@@ -125,6 +134,11 @@ export interface Harness {
   toolNames: string[];
   /** Problems that did not stop startup: skipped routes, MCP servers that failed to connect. */
   warnings: string[];
+  /**
+   * A new conversation. With `canSpawn`, its agent also holds the subagent
+   * tools and can start child sessions, which never can themselves.
+   */
+  createSession(options?: { canSpawn?: boolean }): Session;
   close(): Promise<void>;
 }
 
@@ -138,17 +152,51 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     ...mcp.getAgentTools(),
   ];
 
-  const agent = new Agent({
-    name: 'solenoid',
-    routes,
-    systemPrompt: withToday(settings.agent.system_prompt ?? DEFAULT_SYSTEM_PROMPT),
-    tools,
-    think: settings.agent.think,
-    timeoutMs: settings.agent.timeout_ms,
-    maxTurns: settings.agent.max_turns,
-    screen,
-    logger: agentLogger,
-  });
+  const systemPrompt = settings.agent.system_prompt ?? DEFAULT_SYSTEM_PROMPT;
+  const makeAgent = (name: string, agentTools: AgentTool[], prompt: string) =>
+    new Agent({
+      name,
+      routes,
+      systemPrompt: withToday(prompt),
+      tools: agentTools,
+      think: settings.agent.think,
+      timeoutMs: settings.agent.timeout_ms,
+      maxTurns: settings.agent.max_turns,
+      screen,
+      logger: agentLogger,
+    });
+  const agent = makeAgent('solenoid', tools, systemPrompt);
+
+  // One summarizer for every session's subagents: no tools, and the
+  // transcript it reads is this process's own agents' work.
+  const summarizer = makeAgent('solenoid/summarizer', [], SUMMARIZER_PROMPT);
+  const summarize = async (task: string, transcript: string) => {
+    const result = await summarizer.runMessages([
+      {
+        role: 'user',
+        content: `Task:\n${task}\n\nTranscript:\n${transcript}`,
+        origin: 'agent',
+      },
+    ]);
+    return result.output;
+  };
+
+  const managers: SubagentManager[] = [];
+  const createSession = ({ canSpawn = false }: { canSpawn?: boolean } = {}): Session => {
+    if (!canSpawn) return new Session(agent);
+    const manager = new SubagentManager({
+      tools,
+      createSession: (name, childTools) =>
+        new Session(
+          makeAgent(`solenoid/${name}`, childTools, `${systemPrompt}\n\n${SUBAGENT_ROLE}`)
+        ),
+      summarize,
+    });
+    managers.push(manager);
+    return new Session(
+      makeAgent('solenoid', [...tools, ...manager.tools()], `${systemPrompt}\n\n${SUBAGENT_GUIDE}`)
+    );
+  };
   const toolNames = agent.toolDefinitions.map((t) => t.function.name);
   const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));
   agentLogger.info(
@@ -170,6 +218,10 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       ...skipped,
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),
     ],
-    close: () => mcp.close(),
+    createSession,
+    close: async () => {
+      for (const manager of managers) manager.close();
+      await mcp.close();
+    },
   };
 }

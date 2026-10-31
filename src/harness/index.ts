@@ -10,3 +10,4 @@ export * from './factory.js';
 export * from './messages.js';
 export * from './prompt.js';
 export * from './session.js';
+export * from './subagents.js';

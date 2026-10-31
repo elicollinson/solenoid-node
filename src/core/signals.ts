@@ -51,3 +51,47 @@ export function waitFor(ms: number, signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }
+
+/**
+ * An attempt's deadline that can be held: while any `hold` is open the clock
+ * stops, and it resumes with whatever time was left. A tool waiting on work
+ * outside the attempt (a subagent) would otherwise spend the deadline on
+ * time that is not the attempt's.
+ */
+export class Deadline {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private remaining: number;
+  private armedAt = 0;
+  private holds = 0;
+
+  constructor(
+    ms: number,
+    private readonly expire: () => void
+  ) {
+    this.remaining = ms;
+    this.arm();
+  }
+
+  /** Settle with `promise`, with the clock stopped until it does. */
+  hold<T>(promise: Promise<T>): Promise<T> {
+    if (this.holds++ === 0) this.disarm();
+    return promise.finally(() => {
+      if (--this.holds === 0) this.arm();
+    });
+  }
+
+  clear(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private arm(): void {
+    this.armedAt = performance.now();
+    this.timer = setTimeout(this.expire, Math.max(0, this.remaining));
+  }
+
+  private disarm(): void {
+    this.clear();
+    this.remaining -= performance.now() - this.armedAt;
+  }
+}

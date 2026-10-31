@@ -35,6 +35,23 @@ Answers:
 
 authoredText.offer('prompt:system', DEFAULT_SYSTEM_PROMPT);
 
+/** Added to the parent's prompt when it can spawn subagents. */
+export const SUBAGENT_GUIDE = `Subagents:
+- For work that splits into independent parts, or a long task you can hand off, spawn_subagent starts another agent on it in the background. Give it a complete, self-contained task: it cannot see this conversation.
+- Then wait_for_subagents rather than checking their status over and over, and use subagent_summary or read_subagent_transcript to see what they found.
+- A subagent cannot ask the person anything, and its writes are declined.`;
+
+/** A subagent's standing instructions, after the main prompt. */
+export const SUBAGENT_ROLE =
+  'You are a subagent. Another agent gave you the task below and reads your final answer; the person does not see this conversation. Work the task through, then answer completely and concisely, with what you found and where. If you could not do part of it, say which part and why.';
+
+/** The instructions of the model that summarizes a subagent's work for its parent. */
+export const SUMMARIZER_PROMPT = `You summarize a subagent's work for the agent that started it. You are given the task and the subagent's transcript. In a few sentences: what it did, what it found or produced, what failed or is still open, and where it stands now. Report only what the transcript shows.`;
+
+authoredText.offer('prompt:subagent-guide', SUBAGENT_GUIDE);
+authoredText.offer('prompt:subagent-role', SUBAGENT_ROLE);
+authoredText.offer('prompt:summarizer', SUMMARIZER_PROMPT);
+
 /**
  * The prompt with today's date appended. Without it the model dates "this
  * week" from its training data, a year or more out.

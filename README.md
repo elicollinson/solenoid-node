@@ -11,6 +11,7 @@ A single-agent harness with a React terminal UI, built on Bun. It runs Gemma 4 2
 - **AG-UI 1.0 as the UI contract.** A conversation streams as standard [AG-UI](https://docs.ag-ui.com) events: text, reasoning, tool calls, chart components, approvals as interrupts. Any AG-UI client can draw it; the terminal UI is one.
 - **Ink terminal UI.** Streaming markdown, tool-status lines, inline charts, a settings editor and slash commands.
 - **Tools.** Brave web search, a web page reader, charts, plus any number of **MCP servers** (stdio or HTTP).
+- **Subagents.** The session you talk to can start background subagents on self-contained tasks, wait for them, and read their summaries and transcripts.
 - **Non-interactive mode.** `solenoid --run "<prompt>"` streams the answer to stdout.
 - **OpenTelemetry tracing** with OpenInference spans, with optional W&B Weave export.
 
@@ -101,6 +102,21 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 - **A turn limit.** `agent.max_turns` (default 25) bounds model calls per attempt; the last is offered no tools.
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
+
+### Subagents
+
+`harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:
+
+| Tool | Does |
+|------|------|
+| `spawn_subagent(name, task, tools?)` | Starts a child session in the background, with the parent's tools (or a subset) minus these |
+| `list_subagents`, `subagent_status(id)` | Where each stands: running, done, failed or cancelled, and its answer |
+| `subagent_summary(id)` | A model-written summary of its work |
+| `read_subagent_transcript(id, from, count)` | A page of its transcript in detail |
+| `wait_for_subagents(ids?, mode, timeoutSeconds)` | Blocks until all (or any) finish; waiting does not spend the parent's deadline |
+| `cancel_subagent(id)` | Stops one |
+
+Subagents live in memory with their session. Spawning commits the parent's attempt, so a route fallback never starts one twice. Nobody can approve a subagent's write yet, so those are declined as unattended.
 
 ### Screening
 

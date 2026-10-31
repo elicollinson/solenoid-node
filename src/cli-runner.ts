@@ -48,7 +48,7 @@ export async function runNonInteractive(
 
     // Nobody is here to answer an approval: --yes allows it, and otherwise
     // it is cancelled, which the agent hears as an unattended decline.
-    const session = new Session(harness.agent);
+    const session = harness.createSession({ canSpawn: true });
     const answer = await session.send(prompt, {
       signal: controller.signal,
       onEvent: (event) => {
