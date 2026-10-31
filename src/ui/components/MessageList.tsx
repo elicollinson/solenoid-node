@@ -62,20 +62,16 @@ function ToolItem({
   result: ToolMessage | undefined;
   streaming: boolean;
 }) {
-  const outcome = toolStatus(result);
-  // No result and the reply is over: the run stopped before this call ended.
-  const status = outcome.status === 'running' && !streaming ? 'failed' : outcome.status;
-  const reason =
-    outcome.status === 'failed' ? outcome.reason : status === 'failed' ? 'not run' : '';
+  const outcome = toolStatus(result, { finished: !streaming });
   return (
     <Box paddingLeft={4}>
-      <Text color={statusColors[status]}>
-        {statusIcons[status]} {call.function.name}
+      <Text color={statusColors[outcome.status]}>
+        {statusIcons[outcome.status]} {call.function.name}
       </Text>
-      {reason && (
+      {outcome.status === 'failed' && (
         <Text color="red" dimColor>
           {' '}
-          - {reason}
+          - {outcome.reason}
         </Text>
       )}
     </Box>

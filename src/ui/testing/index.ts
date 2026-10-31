@@ -19,8 +19,6 @@ export type {
   TestHarnessConfig,
   CommandResult,
   Message,
-  ToolCall,
-  MessagePart,
   AgentEvent,
   AgentInterface,
   SettingsConfig,

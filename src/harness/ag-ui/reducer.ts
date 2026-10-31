@@ -50,10 +50,15 @@ export type ToolStatus =
 
 /**
  * Where a tool call stands, from its result message (absent while it runs).
- * Shared so every client words an outcome the same way.
+ * Shared so every client words an outcome the same way. A run that ends
+ * answers its open calls itself; `finished` covers the one it cannot, a turn
+ * stopped while paused on an approval, after its run had already ended.
  */
-export function toolStatus(result: ToolMessage | undefined): ToolStatus {
-  if (!result) return { status: 'running' };
+export function toolStatus(
+  result: ToolMessage | undefined,
+  { finished = false }: { finished?: boolean } = {}
+): ToolStatus {
+  if (!result) return finished ? { status: 'failed', reason: 'not run' } : { status: 'running' };
   const meta = resultMetadata(result.metadata);
   if (meta.quarantined) {
     return { status: 'failed', reason: 'output blocked: possible prompt injection' };
@@ -63,17 +68,20 @@ export function toolStatus(result: ToolMessage | undefined): ToolStatus {
   return { status: 'completed' };
 }
 
-/** A tool call in the thread, with the assistant message that made it. */
+/** Index of the assistant message that made this tool call, or -1. */
+function callerIndex(thread: readonly Message[], toolCallId: string): number {
+  return thread.findLastIndex(
+    (m) => m.role === 'assistant' && m.toolCalls?.some((c) => c.id === toolCallId)
+  );
+}
+
+/** A tool call in the thread. */
 export function findToolCall(
   thread: readonly Message[],
   toolCallId: string
 ): AgUiToolCall | undefined {
-  for (let i = thread.length - 1; i >= 0; i--) {
-    const m = thread[i]!;
-    const call = m.role === 'assistant' ? m.toolCalls?.find((c) => c.id === toolCallId) : undefined;
-    if (call) return call;
-  }
-  return undefined;
+  const caller = thread[callerIndex(thread, toolCallId)] as AssistantMessage | undefined;
+  return caller?.toolCalls?.find((c) => c.id === toolCallId);
 }
 
 /** A tool call's arguments as an object; text that is not one comes back as `{ raw }`. */
@@ -207,9 +215,7 @@ function mapToolCall(
   toolCallId: string,
   change: (call: AgUiToolCall) => AgUiToolCall
 ): Message[] {
-  const index = thread.findLastIndex(
-    (m) => m.role === 'assistant' && m.toolCalls?.some((c) => c.id === toolCallId)
-  );
+  const index = callerIndex(thread, toolCallId);
   if (index === -1) return thread as Message[];
   const parent = thread[index] as AssistantMessage;
   const next = [...thread];

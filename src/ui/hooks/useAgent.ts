@@ -4,7 +4,7 @@
  * Builds the harness once (connecting MCP servers) behind React Suspense and
  * hands the UI a conversation session for it.
  */
-import { useRef } from 'react';
+import { useState } from 'react';
 import { loadSettings } from '../../config/index.js';
 import { type Harness, Session, createHarness } from '../../harness/index.js';
 
@@ -59,7 +59,6 @@ export function currentHarness(): Harness | undefined {
 export function useAgent(): { harness: Harness; session: Session } {
   // Suspends until the harness is ready
   const harness = getHarnessResource().read();
-  const sessionRef = useRef<Session | null>(null);
-  if (!sessionRef.current) sessionRef.current = new Session(harness.agent);
-  return { harness, session: sessionRef.current };
+  const [session] = useState(() => new Session(harness.agent));
+  return { harness, session };
 }

@@ -15,6 +15,7 @@ import {
   applyEvent,
   approvalAnswer,
   customValue,
+  describeRouteAdvance,
   describeRunError,
   findToolCall,
   parseToolArgs,
@@ -36,8 +37,26 @@ import type { Notice } from './thread.js';
 
 type Screen = 'chat' | 'settings' | 'help';
 
-interface ApprovalState extends PendingApproval {
+/** The approval interrupt the run is paused on: what it names, not a copy of the call. */
+interface OpenApproval {
   interruptId: string;
+  toolCallId?: string;
+  message: string;
+}
+
+/** The conversation as this client has folded it, and notices posted into it. */
+interface Chat {
+  thread: AgUiMessage[];
+  notices: Notice[];
+}
+
+function pendingApproval(thread: readonly AgUiMessage[], open: OpenApproval): PendingApproval {
+  const call = open.toolCallId ? findToolCall(thread, open.toolCallId) : undefined;
+  return {
+    tool: call?.function.name ?? 'a tool',
+    description: open.message,
+    args: call ? parseToolArgs(call.function.arguments) : {},
+  };
 }
 
 function formatInterruptHint(interruptKey: string): string {
@@ -69,17 +88,18 @@ function AppContent() {
   const { exit } = useApp();
   const { harness, session } = useAgent(); // Suspends until the harness is ready
 
-  const [thread, setThread] = useState<AgUiMessage[]>([]);
-  const [notices, setNotices] = useState<Notice[]>(() =>
-    harness.warnings.map((text) => ({ id: crypto.randomUUID(), text, at: 0 }))
-  );
+  const [chat, setChat] = useState<Chat>(() => ({
+    thread: [],
+    notices: harness.warnings.map((text) => ({ id: crypto.randomUUID(), text, at: 0 })),
+  }));
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [screen, setScreen] = useState<Screen>('chat');
-  const [approval, setApproval] = useState<ApprovalState | null>(null);
+  const [openApproval, setOpenApproval] = useState<OpenApproval | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const interruptKey = harness.settings.keyboard.interrupt;
   const showReasoning = harness.settings.display.show_reasoning;
+  const approval = openApproval && pendingApproval(chat.thread, openApproval);
 
   // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
   // useInput cleanup unrefs stdin, and an always-active no-op handler
@@ -110,11 +130,11 @@ function AppContent() {
     { isActive: isProcessing && screen === 'chat' && !approval }
   );
 
-  // The session holds the same thread this client folds, so handlers read
-  // it there rather than from state captured by an older render.
   const addSystemMessage = (text: string) => {
-    const at = session.messages.length;
-    setNotices((prev) => [...prev, { id: crypto.randomUUID(), text, at }]);
+    setChat((c) => ({
+      ...c,
+      notices: [...c.notices, { id: crypto.randomUUID(), text, at: c.thread.length }],
+    }));
   };
 
   const handleSlashCommand = (command: string): void => {
@@ -128,8 +148,7 @@ function AppContent() {
         return;
       case '/clear':
         session.clear();
-        setThread([]);
-        setNotices([]);
+        setChat({ thread: [], notices: [] });
         return;
       case '/quit':
       case '/exit':
@@ -153,7 +172,12 @@ function AppContent() {
   };
 
   const onEvent = (event: AGUIEvent): void => {
-    setThread((current) => applyEvent(current, event));
+    const hidden =
+      !showReasoning &&
+      (event.type === EventType.REASONING_MESSAGE_START ||
+        event.type === EventType.REASONING_MESSAGE_CONTENT);
+    // Hidden reasoning changes nothing on screen, so it is not folded in.
+    if (!hidden) setChat((c) => ({ ...c, thread: applyEvent(c.thread, event) }));
     switch (event.type) {
       case EventType.STEP_STARTED:
         setStatus('Thinking...');
@@ -169,7 +193,7 @@ function AppContent() {
         const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
         const flag = customValue(event, CUSTOM_EVENTS.guardrail);
         if (retry) setStatus(`Retrying (${retry.error})...`);
-        if (route) setStatus(`${route.from.provider} failed; switching to ${route.to.provider}...`);
+        if (route) setStatus(`${describeRouteAdvance(route)}...`);
         if (flag?.decision === 'observe') setStatus('Screen flagged your message; continuing');
         break;
       }
@@ -179,18 +203,11 @@ function AppContent() {
             ? event.outcome.interrupts.find((i) => i.reason === APPROVAL_REASON)
             : undefined;
         if (interrupt) {
-          // The interrupt names the call; the thread holds what it asked for.
-          const call = interrupt.toolCallId
-            ? findToolCall(session.messages, interrupt.toolCallId)
-            : undefined;
-          const tool = call?.function.name ?? 'a tool';
-          setApproval({
+          setOpenApproval({
             interruptId: interrupt.id,
-            tool,
-            description: interrupt.message ?? '',
-            args: call ? parseToolArgs(call.function.arguments) : {},
+            ...(interrupt.toolCallId ? { toolCallId: interrupt.toolCallId } : {}),
+            message: interrupt.message ?? '',
           });
-          setStatus(`Waiting for approval: ${tool}`);
         }
         break;
       }
@@ -198,10 +215,10 @@ function AppContent() {
   };
 
   const answerApproval = (allow: boolean) => {
-    if (!approval) return;
-    setApproval(null);
+    if (!openApproval || !approval) return;
+    setOpenApproval(null);
     setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
-    session.resume([approvalAnswer(approval.interruptId, allow ? 'allow' : 'decline')]);
+    session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
   };
 
   const handleSubmit = (text: string) => {
@@ -221,16 +238,14 @@ function AppContent() {
     session
       .send(text, { signal: controller.signal, onEvent })
       .catch((error) => {
-        if (error instanceof AgentAbortedError) {
-          addSystemMessage('Interrupted.');
-        } else {
+        if (!(error instanceof AgentAbortedError)) {
           uiLogger.error({ error: String(error) }, 'Run failed');
-          addSystemMessage(describeRunError(error));
         }
+        addSystemMessage(describeRunError(error));
       })
       .then(() => {
         abortRef.current = null;
-        setApproval(null);
+        setOpenApproval(null);
         setIsProcessing(false);
         setStatus('Ready');
       });
@@ -250,8 +265,8 @@ function AppContent() {
       <Header />
       <Box flexDirection="column" flexGrow={1} paddingX={1}>
         <MessageList
-          thread={thread}
-          notices={notices}
+          thread={chat.thread}
+          notices={chat.notices}
           streaming={isProcessing}
           showReasoning={showReasoning}
         />
@@ -269,7 +284,7 @@ function AppContent() {
       )}
       <StatusBar
         isLoading={isProcessing}
-        status={status}
+        status={approval ? `Waiting for approval: ${approval.tool}` : status}
         interruptHint={formatInterruptHint(interruptKey)}
       />
       {primary && (

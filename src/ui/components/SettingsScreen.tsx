@@ -45,6 +45,9 @@ function linesToYaml(lines: EditorLine[]): string {
   return lines.map((line) => ' '.repeat(line.indent) + line.content).join('\n');
 }
 
+/** Editor lines shown at once, centred on the current one. */
+const MAX_VISIBLE_LINES = 12;
+
 export function SettingsScreen({ onClose }: SettingsScreenProps) {
   const [sections] = useState<SectionInfo[]>(() => getAllSections());
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -63,12 +66,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
   const [showHelp, setShowHelp] = useState(false);
 
   // Calculate visible lines (show lines around current)
-  const maxVisible = 12;
-  const visibleStart = Math.max(0, currentLineIndex - Math.floor(maxVisible / 2));
-  const visibleRange = {
-    start: visibleStart,
-    end: Math.min(lines.length, visibleStart + maxVisible),
-  };
+  const visibleStart = Math.max(0, currentLineIndex - Math.floor(MAX_VISIBLE_LINES / 2));
+  const visibleEnd = Math.min(lines.length, visibleStart + MAX_VISIBLE_LINES);
 
   const startEditing = (section: SectionInfo) => {
     const yaml = getSectionAsYaml(section.key);
@@ -171,10 +170,6 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     }
   };
 
-  const cancelLineEdit = () => {
-    setMode('editing');
-  };
-
   const backToSelection = () => {
     setMode('selection');
     setEditingSection(null);
@@ -259,7 +254,7 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
 
     if (mode === 'line-edit') {
       if (key.escape) {
-        cancelLineEdit();
+        setMode('editing');
         return;
       }
       if (key.return) {
@@ -323,8 +318,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
       </Text>
 
       <Box marginTop={1} flexDirection="column" borderStyle="single" paddingX={1}>
-        {lines.slice(visibleRange.start, visibleRange.end).map((line, displayIndex) => {
-          const actualIndex = visibleRange.start + displayIndex;
+        {lines.slice(visibleStart, visibleEnd).map((line, displayIndex) => {
+          const actualIndex = visibleStart + displayIndex;
           const isCurrentLine = actualIndex === currentLineIndex;
           const isEditing = isCurrentLine && mode === 'line-edit';
 
@@ -352,8 +347,8 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
           );
         })}
 
-        {lines.length > visibleRange.end && (
-          <Text dimColor>... {lines.length - visibleRange.end} more lines</Text>
+        {lines.length > visibleEnd && (
+          <Text dimColor>... {lines.length - visibleEnd} more lines</Text>
         )}
       </Box>
 

@@ -28,6 +28,8 @@ import {
   aggregateTokenUsage,
 } from '@ag-ui/core';
 import type { AgentEvent, RouteRef } from '../../core/index.js';
+
+type GuardrailEvent = Extract<AgentEvent, { type: 'guardrail' }>;
 import { SOLENOID_METADATA_KEY, type ToolResultMetadata } from './reducer.js';
 
 /** Custom event names, for what AG-UI has no event of its own for. */
@@ -44,11 +46,7 @@ export const CUSTOM_EVENTS = {
 export interface CustomEventValues {
   [CUSTOM_EVENTS.retry]: { error: string; delayMs: number };
   [CUSTOM_EVENTS.routeAdvanced]: { from: RouteRef; to: RouteRef; error: string };
-  [CUSTOM_EVENTS.guardrail]: {
-    boundary: 'input' | 'tool_output';
-    decision: 'allow' | 'observe' | 'quarantine' | 'block';
-    score?: number;
-  };
+  [CUSTOM_EVENTS.guardrail]: Pick<GuardrailEvent, 'boundary' | 'decision' | 'score'>;
 }
 
 export type CustomEventName = keyof CustomEventValues;
@@ -82,6 +80,8 @@ export class TurnEncoder {
   private reasoningId: string | undefined;
   private route: RouteRef | undefined;
   private usage: TokenUsage[] = [];
+  /** Tool calls started and not yet answered: a run that ends leaves them "not run". */
+  private readonly openCalls = new Set<string>();
 
   constructor(
     private readonly threadId: string,
@@ -152,6 +152,7 @@ export class TurnEncoder {
         break;
 
       case 'tool_start':
+        this.openCalls.add(event.id);
         this.emit({
           type: EventType.TOOL_CALL_START,
           toolCallId: event.id,
@@ -177,8 +178,7 @@ export class TurnEncoder {
         break;
 
       case 'tool_end': {
-        // The event has no error field of its own; the reducer moves this
-        // one onto the tool message's native `error`.
+        this.openCalls.delete(event.id);
         const outcome: ToolResultMetadata = {
           durationMs: event.durationMs,
           ...(event.error ? { error: event.error } : {}),
@@ -211,6 +211,7 @@ export class TurnEncoder {
         });
         this.snapshot(this.turnStart);
         this.usage = [];
+        this.openCalls.clear();
         break;
 
       case 'guardrail':
@@ -248,6 +249,7 @@ export class TurnEncoder {
   /** End the run: the person stopped it. */
   cancel(): void {
     this.closeStep();
+    this.closeCalls();
     this.finish({ type: 'cancelled' });
   }
 
@@ -255,6 +257,7 @@ export class TurnEncoder {
   fail(message: string, code?: string): void {
     if (!this.runId) return;
     this.closeStep();
+    this.closeCalls();
     this.runId = undefined;
     this.sink.emit({
       type: EventType.RUN_ERROR,
@@ -286,6 +289,22 @@ export class TurnEncoder {
 
   private custom<N extends CustomEventName>(name: N, value: CustomEventValues[N]): void {
     this.emit({ type: EventType.CUSTOM, name, value });
+  }
+
+  /** Answer every call the run is ending without, so the thread says what happened to it. */
+  private closeCalls(): void {
+    for (const id of this.openCalls) {
+      const outcome: ToolResultMetadata = { error: 'not run' };
+      this.emit({
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: `${id}:result`,
+        toolCallId: id,
+        content: 'Not run: the turn ended first.',
+        role: 'tool',
+        metadata: { [SOLENOID_METADATA_KEY]: outcome },
+      });
+    }
+    this.openCalls.clear();
   }
 
   private snapshot(length: number): void {

@@ -14,6 +14,7 @@ import {
   approvalAnswer,
   createHarness,
   customValue,
+  describeRouteAdvance,
   describeRunError,
 } from './harness/index.js';
 import { initTracing, shutdownTracing } from './telemetry/index.js';
@@ -55,7 +56,7 @@ export async function runNonInteractive(
         if (event.type === EventType.TOOL_CALL_START) {
           process.stderr.write(`· ${event.toolCallName}\n`);
         } else if (route) {
-          process.stderr.write(`${route.from.provider} failed; retrying on ${route.to.provider}\n`);
+          process.stderr.write(`${describeRouteAdvance(route)}\n`);
         } else if (event.type === EventType.RUN_FINISHED && event.outcome?.type === 'interrupt') {
           session.resume(
             event.outcome.interrupts.map((i) =>

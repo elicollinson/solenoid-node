@@ -4,7 +4,5 @@ export { ChatInput } from './ChatInput.js';
 export { StatusBar } from './StatusBar.js';
 export { SettingsScreen } from './SettingsScreen.js';
 export { HelpScreen } from './HelpScreen.js';
-export { ChartRenderer } from './ChartRenderer.js';
-export { ActivityView } from './catalog.js';
 export { LoadingScreen } from './LoadingScreen.js';
 export { ErrorBoundary } from './ErrorBoundary.js';

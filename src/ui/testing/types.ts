@@ -4,19 +4,6 @@
  * Type definitions for the Solenoid testing infrastructure.
  */
 
-/** A tool call as the test harness's own app draws it. */
-export interface ToolCall {
-  id: string;
-  name: string;
-  status: 'running' | 'completed' | 'error';
-  result?: string;
-  args?: Record<string, unknown>;
-}
-
-export type MessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall };
-
 /**
  * A message in the test harness's own app, which keeps this flat shape for
  * its scripted agents; the real app draws the AG-UI thread.
@@ -26,8 +13,6 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   isStreaming?: boolean;
-  parts?: MessagePart[];
-  wasInterrupted?: boolean;
 }
 
 /**
@@ -81,7 +66,7 @@ export interface StructuredFrame {
 export interface ToolCallAssertion {
   id?: string;
   name: string;
-  expectedStatus: ToolCall['status'];
+  expectedStatus: 'running' | 'completed' | 'error';
   expectedArgs?: Record<string, unknown>;
 }
 
@@ -228,5 +213,3 @@ export interface CommandResult {
   events: AgentEvent[];
   error?: Error;
 }
-
-// Re-export commonly used types

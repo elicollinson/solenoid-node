@@ -83,7 +83,7 @@ Terminal UI (src/ui)            CLI --run (src/cli-runner.ts)
 |-------|-------|
 | A turn | `RUN_STARTED` … `RUN_FINISHED`; each model call is a `STEP` |
 | Text, reasoning | `TEXT_MESSAGE_*`, `REASONING_*` |
-| A tool call | `TOOL_CALL_START/ARGS/END`, then `TOOL_CALL_RESULT` with `error`, `quarantined` or `declined` in `metadata.solenoid` |
+| A tool call | `TOOL_CALL_START/ARGS/END`, then `TOOL_CALL_RESULT` with `error`, `quarantined` or `declined` in `metadata.solenoid`; a run that ends first answers its open calls as `not run` |
 | A chart | `ACTIVITY_SNAPSHOT` with `activityType: "solenoid.chart"`; content validated by the schema in `src/display` |
 | A write waiting for approval | `RUN_FINISHED` with an `interrupt` outcome; `session.resume([{ interruptId, status: "resolved", payload: { approved } }])` continues it in a new run |
 | A retry or a route change | `CUSTOM` (`solenoid.retry`, `solenoid.route_advanced`), then `MESSAGES_SNAPSHOT` without the discarded output |
@@ -205,9 +205,12 @@ src/
 | `bun run dev` | Start with watch mode |
 | `bun run start` | Start the app |
 | `bun test` | Run tests. The real-agent e2e tests run when LM Studio serves the default model |
+| `bun run build` | Bundle `dist/cli.js` for Node, with React Compiler applied |
 | `bun run typecheck` | TypeScript type checking |
 | `bun run lint` | Lint with Biome |
 | `bun run scripts/live-core-smoke.ts` | Two-turn tool conversation on each live backend |
+
+The Ink UI is compiled with [React Compiler](https://react.dev/learn/react-compiler), so components carry no manual `useMemo`, `useCallback` or `memo`. Bun does not run Babel, so `scripts/react-compiler.ts` applies it as a Bun plugin: `bunfig.toml` preloads it for `bun run` and `bun test`, and `scripts/build.ts` uses it for the bundle.
 
 Tracing: set `WANDB_API_KEY` and `WANDB_PROJECT_ID` to export spans to W&B Weave. Structured JSON logs go to `logs/` (agent.log, ui.log, server.log).
 

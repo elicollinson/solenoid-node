@@ -80,10 +80,9 @@ export function threadBubbles(
       reply.push(message);
     }
   });
-  // The last reply streams unless a notice was posted after it.
-  const noticeAfter = next < notices.length && notices[next]!.at <= thread.length;
-  if (reply.length) bubbles.push(replyBubble(reply, streaming && !noticeAfter, showReasoning));
-  reply = [];
+  // A notice posted after the last reply ends it: it is drawn finished, above the notice.
+  flushNotices(thread.length);
+  if (reply.length) bubbles.push(replyBubble(reply, streaming, showReasoning));
   flushNotices(Number.POSITIVE_INFINITY);
   return bubbles;
 }

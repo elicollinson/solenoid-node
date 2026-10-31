@@ -738,10 +738,9 @@ export class SolenoidTestHarness {
           );
         }
 
-        const wasInterrupted = interruptRef.current;
         interruptRef.current = false;
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false, wasInterrupted } : m))
+          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
         );
         setIsProcessing(false);
         setStatus('Ready');

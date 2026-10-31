@@ -185,6 +185,28 @@ describe('Session (AG-UI)', () => {
     expect(events.at(-1)).toMatchObject({ type: EventType.RUN_ERROR, message: 'model is down' });
   });
 
+  test('a call still running when the turn is stopped is answered as not run', async () => {
+    const controller = new AbortController();
+    const slow = defineTool({
+      name: 'slow_read',
+      description: 'A read that never finishes.',
+      kind: 'read',
+      schema: z.object({}),
+      execute: () => {
+        controller.abort();
+        return new Promise(() => {});
+      },
+    });
+    const provider = new ScriptedProvider('fake', [call('slow_read', {}, 's1')]);
+    const session = new Session(
+      new Agent({ routes: [{ client: provider, model: 'm' }], tools: [slow] })
+    );
+
+    await expect(session.send('go', { signal: controller.signal, onEvent: () => {} })).rejects.toThrow();
+    const result = session.messages.find((m) => m.role === 'tool');
+    expect(result).toMatchObject({ toolCallId: 's1', error: 'not run' });
+  });
+
   test('an interrupted run finishes cancelled', async () => {
     const controller = new AbortController();
     const provider = new ScriptedProvider('fake', [

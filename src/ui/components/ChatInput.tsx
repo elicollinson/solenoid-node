@@ -26,10 +26,6 @@ export function ChatInput({
 }: ChatInputProps) {
   const [key, setKey] = useState(0);
 
-  const handleChange = (value: string) => {
-    uiLogger.trace({ value, length: value.length }, 'ChatInput onChange');
-  };
-
   const handleSubmit = (text: string) => {
     uiLogger.debug({ text }, 'ChatInput handleSubmit');
     const trimmed = text.trim();
@@ -37,7 +33,6 @@ export function ChatInput({
       onSubmit(trimmed);
       // Force TextInput to reset by changing its key
       setKey((k) => k + 1);
-      uiLogger.debug({ newKey: key + 1 }, 'ChatInput key incremented');
     }
   };
 
@@ -49,7 +44,6 @@ export function ChatInput({
       <TextInput
         key={key}
         placeholder={placeholder}
-        onChange={handleChange}
         onSubmit={handleSubmit}
         isDisabled={isDisabled}
       />
