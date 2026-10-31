@@ -51,9 +51,7 @@ describe('SubagentManager', () => {
     expect(child).toMatchObject({ id: 'sa-1', status: 'running' });
     expect(given[0]).toEqual(['echo', 'save_note']);
 
-    expect(await manager.wait(manager.select(), 'all', 5_000, new AbortController().signal)).toBe(
-      true
-    );
+    await manager.idle();
     expect(manager.get('sa-1')).toMatchObject({ status: 'done', answer: 'Found it.' });
     const { entries, total } = manager.transcript('sa-1', 0, 10);
     expect(total).toBe(4);
@@ -74,7 +72,7 @@ describe('SubagentManager', () => {
     const { manager } = managerWith([[call('save_note', { note: 'x' }), say('Could not save.')]]);
     manager.spawn('writer', 'save a note');
 
-    await manager.wait(manager.select(), 'all', 5_000, new AbortController().signal);
+    await manager.idle();
     const child = manager.get('sa-1');
     expect(child.status).toBe('done');
     expect(child.declined).toHaveLength(1);
@@ -82,14 +80,34 @@ describe('SubagentManager', () => {
     expect(String(result?.content)).toContain('unattended');
   });
 
-  test('cancel stops a running subagent; a wait times out without one finishing', async () => {
+  test('the same task while it is under way is the same subagent', () => {
+    const hang: Step = () => new Promise<never>(() => {}) as never;
+    const { manager, given } = managerWith([[hang]]);
+    const first = manager.spawn('r', 'look it up');
+    expect(manager.spawn('r again', 'look it up')).toBe(first);
+    expect(given).toHaveLength(1);
+    manager.close();
+  });
+
+  test('a running subagent cannot be read, only a finished one', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { manager } = managerWith([[() => gate.then(() => say('Done.')) as never]]);
+    const child = manager.spawn('r', 'task');
+    expect(() => manager.transcript(child.id, 0, 10)).toThrow('sa-1 is still running');
+    await expect(manager.summary(child.id)).rejects.toThrow('You will get a message from it');
+    release();
+    await child.settled;
+    expect(manager.transcript(child.id, 0, 10).entries[0]).toBe('[0] task: task');
+  });
+
+  test('cancel stops a running subagent', async () => {
     const hang: Step = () => new Promise<never>(() => {}) as never;
     const { manager } = managerWith([[hang]]);
     manager.spawn('slow', 'take forever');
 
-    expect(
-      await manager.wait(manager.select(['sa-1']), 'all', 20, new AbortController().signal)
-    ).toBe(false);
     manager.cancel('sa-1');
     await manager.get('sa-1').settled;
     expect(manager.get('sa-1').status).toBe('cancelled');
@@ -116,29 +134,6 @@ describe('Subagent tools in the loop', () => {
     expect(second.calls).toHaveLength(0);
     expect(manager.select()).toHaveLength(1);
   });
-
-  test('waiting on subagents does not spend the parent deadline', async () => {
-    const slow: Step = () =>
-      new Promise((resolve) => setTimeout(() => resolve(say('slow answer')), 150)) as never;
-    const { manager } = managerWith([[slow]]);
-    const parent = new Agent({
-      routes: [
-        {
-          client: new ScriptedProvider('parent', [
-            call('spawn_subagent', { name: 'r', task: 't' }),
-            call('wait_for_subagents', { timeoutSeconds: 5 }),
-            say('All done.'),
-          ]),
-          model: 'm',
-        },
-      ],
-      tools: manager.tools(),
-      timeoutMs: 100,
-    });
-
-    expect(await parent.run('go')).toBe('All done.');
-    expect(manager.get('sa-1').status).toBe('done');
-  });
 });
 
 describe('Subagent queue', () => {
@@ -151,7 +146,7 @@ describe('Subagent queue', () => {
     expect(third.status).toBe('queued');
 
     manager.cancel('sa-1');
-    await manager.wait([third], 'all', 5_000, new AbortController().signal);
+    await third.settled;
     expect(third).toMatchObject({ status: 'done', answer: 'third done' });
     manager.close();
   });
@@ -171,7 +166,6 @@ describe('Subagent queue', () => {
   });
 });
 
-const never = new AbortController().signal;
 const text = (m: ChatMessage | undefined) => String(m?.content ?? '');
 
 describe('Messaging a subagent', () => {
@@ -182,7 +176,7 @@ describe('Messaging a subagent', () => {
 
     manager.message(child.id, 'now the second part');
     expect(child.status).toBe('running');
-    await manager.wait([child], 'all', 5_000, never);
+    await child.settled;
     expect(child).toMatchObject({ status: 'done', answer: 'Second answer.' });
     const tasks = child.session.messages.filter((m) => m.role === 'user');
     expect(tasks.map((m) => m.content)).toEqual(['first task', 'now the second part']);
@@ -212,27 +206,40 @@ describe('Messaging a subagent', () => {
 });
 
 describe('Subagent news', () => {
-  test('a child that finished unseen is news once; seen or cancelled ones are not', async () => {
+  test('every child that resolves sends one message; a cancelled one sends none', async () => {
     const hang: Step = () => new Promise<never>(() => {}) as never;
-    const { manager } = managerWith([[say('A found.')], [say('B found.')], [hang]]);
+    const { manager } = managerWith([[say('A found.')], [say('')], [hang]]);
     const a = manager.spawn('a', 'one');
     const b = manager.spawn('b', 'two');
     await Promise.all([a.settled, b.settled]);
     const c = manager.spawn('c', 'three');
-
-    // The parent's model saw b through a tool.
-    await manager
-      .tools()
-      .find((t) => t.definition.function.name === 'subagent_status')!
-      .execute({ id: b.id }, { signal: never, commit: () => {}, untimed: (p) => p });
     manager.cancel(c.id);
     await c.settled;
 
     const news = manager.takeNews()!;
-    expect(news.split('\n')[0]).toBe('Subagents finished: a (sa-1) done.');
+    expect(news.split('\n')[0]).toBe('Subagents finished: a (sa-1) done, b (sa-2) done.');
     expect(news).toContain('A found.');
-    expect(news).not.toContain('B found.');
+    expect(news).toContain('b (sa-2) answered:\nNothing to report.');
+    expect(news).not.toContain('(sa-3)');
     expect(manager.takeNews()).toBeUndefined();
+  });
+
+  test('status lists every child while any runs, and nothing once all have resolved', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { manager } = managerWith([[say('Quick.')], [() => gate.then(() => say('Slow.')) as never]]);
+    const quick = manager.spawn('quick', 'one');
+    manager.spawn('slow', 'two');
+    await quick.settled;
+
+    const status = manager.status()!;
+    expect(status).toContain('- sa-1 quick: done');
+    expect(status).toContain('- sa-2 slow: running');
+    release();
+    await manager.idle();
+    expect(manager.status()).toBeUndefined();
   });
 
   test("a child finishing after the parent's turn starts a parent turn with the news", async () => {
@@ -269,24 +276,51 @@ describe('Subagent news', () => {
     expect(events[1]).toMatchObject({ type: 'TEXT_MESSAGE_START', role: 'developer' });
   });
 
-  test('news that arrives while the parent waits on the child is not delivered again', async () => {
-    const { manager } = managerWith([[say('Done.')]]);
+  test('the parent orchestrates: it ends its turn, and hears from each child with the status of the rest', async () => {
+    const gates = [0, 1].map(() => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    });
+    const { manager } = managerWith([
+      [() => gates[0]!.promise.then(() => say('A is 1.')) as never],
+      [() => gates[1]!.promise.then(() => say('B is 2.')) as never],
+    ]);
     const provider = new ScriptedProvider('parent', [
-      call('spawn_subagent', { name: 'r', task: 't' }),
-      call('wait_for_subagents', {}),
-      say('All done.'),
+      call('spawn_subagent', { name: 'a', task: 'find a' }),
+      call('spawn_subagent', { name: 'b', task: 'find b' }),
+      say('Two researchers are on it.'),
+      say('A is back; waiting on B.'),
+      say('A is 1 and B is 2.'),
     ]);
     const parent = new Session(
       new Agent({ routes: [{ client: provider, model: 'm' }], tools: manager.tools() }),
       { background: manager }
     );
-    let autoTurns = 0;
-    parent.onAutoTurn(() => {
-      autoTurns++;
+    const answers: string[] = [];
+    parent.onAutoTurn((turn) => {
+      turn({ onEvent: () => {} }).then((answer) => answers.push(answer));
     });
 
-    await parent.send('go', { onEvent: () => {} });
+    answers.push(await parent.send('find a and b', { onEvent: () => {} }));
+    gates[0]!.release();
+    while (answers.length < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+    const afterA = text(provider.calls[3]?.at(-1));
+    expect(afterA).toContain('a (sa-1) answered:\nA is 1.');
+    expect(afterA).toContain('- sa-2 b: running');
+    gates[1]!.release();
     await parent.idle();
-    expect(autoTurns).toBe(0);
+
+    expect(answers).toEqual([
+      'Two researchers are on it.',
+      'A is back; waiting on B.',
+      'A is 1 and B is 2.',
+    ]);
+    // Nothing is running once B resolves, so its message has no status block.
+    expect(text(provider.calls[4]?.at(-1))).not.toContain('Status of your subagents');
+    // The thread shows the person's words alone.
+    expect(parent.messages.find((m) => m.role === 'user')?.content).toBe('find a and b');
   });
 });

@@ -3,13 +3,14 @@
  *
  * A session that can spawn holds one SubagentManager: the children it has
  * started, each a Session of its own running in the background, and the
- * tools the parent's model uses to start, watch, message, read, wait for
- * and stop them. Everything is in memory and lives as long as the parent
- * session.
+ * tools the parent's model uses to start, message, read and stop them.
+ * Everything is in memory and lives as long as the parent session, so a
+ * finished child can still be read.
  *
- * It is the parent session's background work: a child that finishes
- * without the parent's model having seen it (through wait_for_subagents,
- * subagent_status and the rest) is news, which starts a parent turn.
+ * It is the parent session's background work. While any child runs, every
+ * message the parent's model gets ends with their status; and every child
+ * that resolves, done or failed, sends the parent a message of its own,
+ * which starts a parent turn. The parent never blocks on a child.
  *
  * A child runs with the parent's tools, or a subset named at spawn, never
  * the subagent tools themselves: depth stays at one. At most a few run at
@@ -22,7 +23,7 @@ import { z } from 'zod';
 import { type AgentTool, type ApprovalRequest, defineTool, truncate } from '../core/index.js';
 import { parseToolArgs, toolStatus } from './ag-ui/reducer.js';
 import { describeRunError } from './messages.js';
-import { SUBAGENT_NEWS } from './prompt.js';
+import { SUBAGENT_NEWS, SUBAGENT_STARTED, SUBAGENT_STATUS } from './prompt.js';
 import {
   type Background,
   type Session,
@@ -36,8 +37,6 @@ type SubagentStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 const MAX_SUBAGENTS = 8;
 /** How many run at once; the rest wait their turn. */
 const MAX_RUNNING = 2;
-/** Longest a single wait_for_subagents may block. */
-const MAX_WAIT_SECONDS = 600;
 /** Transcript characters handed to the summarizer, from the end. */
 const SUMMARY_INPUT_CHARS = 20_000;
 /** A transcript entry's text, before it is cut. */
@@ -86,8 +85,8 @@ export class SubagentManager implements Background {
   private readonly queue: Array<() => void> = [];
   private running = 0;
   private next = 1;
-  /** Children that finished, done or failed, and the parent's model has not seen since. */
-  private readonly unseen = new Set<Subagent>();
+  /** Children that resolved, done or failed, whose message the parent has not had yet. */
+  private resolved: Subagent[] = [];
   private newsListener: (() => void) | undefined;
 
   constructor(private readonly options: SubagentManagerOptions) {}
@@ -103,6 +102,9 @@ export class SubagentManager implements Background {
         `Unknown tools ${unknown.join(', ')}; a subagent can have: ${[...available.keys()].join(', ')}`
       );
     }
+    // Asked again for work already under way: the same child, not a second one.
+    const same = [...this.children.values()].find((c) => isActive(c) && c.task === task);
+    if (same) return same;
     const tools = toolNames?.length
       ? toolNames.map((n) => available.get(n)!)
       : [...available.values()];
@@ -140,8 +142,8 @@ export class SubagentManager implements Background {
     const child = this.get(id);
     if (isActive(child)) child.inbox.push(text);
     else {
-      // The parent is taking it up again, so how it finished is not news.
-      this.unseen.delete(child);
+      // The parent is taking it up again: its last resolution is out of date.
+      this.resolved = this.resolved.filter((c) => c !== child);
       this.start(child, text);
     }
     return child;
@@ -156,38 +158,23 @@ export class SubagentManager implements Background {
     return child;
   }
 
+  /**
+   * A child that has finished. The parent hears from one still at work when
+   * it finishes, so reading it before then is refused rather than polled.
+   */
+  private finished(id: string): Subagent {
+    const child = this.get(id);
+    if (isActive(child)) {
+      throw new Error(
+        `${id} is still ${child.status}. You will get a message from it when it finishes; until then, carry on or end your turn.`
+      );
+    }
+    return child;
+  }
+
   /** The named children, or all of them. */
   select(ids?: string[]): Subagent[] {
     return ids?.length ? ids.map((id) => this.get(id)) : [...this.children.values()];
-  }
-
-  /**
-   * Resolve true once the children have all finished (or any one has),
-   * false when the timeout passes first. Stops waiting when `signal` fires.
-   */
-  async wait(
-    children: Subagent[],
-    mode: 'all' | 'any',
-    timeoutMs: number,
-    signal: AbortSignal
-  ): Promise<boolean> {
-    if (!children.length) return true;
-    const finished =
-      mode === 'all'
-        ? Promise.all(children.map((c) => c.settled))
-        : Promise.race(children.map((c) => c.settled));
-    const stop = new AbortController();
-    const timedOut = new Promise<false>((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs);
-      for (const s of [signal, stop.signal]) {
-        s.addEventListener('abort', () => clearTimeout(timer), { once: true });
-      }
-    });
-    try {
-      return await Promise.race([finished.then(() => true as const), timedOut]);
-    } finally {
-      stop.abort();
-    }
   }
 
   cancel(id: string): Subagent {
@@ -204,19 +191,19 @@ export class SubagentManager implements Background {
   }
 
   /**
-   * The children that finished since the parent's model last saw them, as
-   * a message for it. A cancelled child is not news: only the parent
+   * The resolution of each child that resolved since the last call, as a
+   * message for the parent. A cancelled child sends none: only the parent
    * cancels one.
    */
   takeNews(): string | undefined {
-    const finished = [...this.unseen];
+    const finished = this.resolved;
     if (!finished.length) return undefined;
-    this.unseen.clear();
+    this.resolved = [];
     const label = (c: Subagent) => `${c.name} (${c.id})`;
     const heading = finished.map((c) => `${label(c)} ${c.status}`).join(', ');
     const details = finished.map((c) =>
       c.status === 'done'
-        ? `${label(c)} answered:\n${truncate(c.answer ?? '', NEWS_ANSWER_CHARS, { showLength: true })}`
+        ? `${label(c)} answered:\n${truncate(c.answer || 'Nothing to report.', NEWS_ANSWER_CHARS, { showLength: true })}`
         : `${label(c)} failed: ${c.error}`
     );
     return `Subagents finished: ${heading}.\n\n${SUBAGENT_NEWS}\n\n${details.join('\n\n')}`;
@@ -226,9 +213,16 @@ export class SubagentManager implements Background {
     this.newsListener = listener;
   }
 
-  /** The parent's model has been shown this child: how it finished is no longer news. */
-  seen(child: Subagent): void {
-    this.unseen.delete(child);
+  /** Where every child stands, while any is queued or running; for each parent message. */
+  status(): string | undefined {
+    const children = [...this.children.values()];
+    if (!children.some(isActive)) return undefined;
+    const lines = children.map((c) => {
+      const v = view(c);
+      const doing = v.running ? `, running ${v.running}` : '';
+      return `- ${c.id} ${c.name}: ${c.status}, ${v.elapsedSeconds}s, ${v.steps} steps${doing}`;
+    });
+    return `${SUBAGENT_STATUS}\n${lines.join('\n')}`;
   }
 
   /** Settles once every child has finished, including any a message restarts meanwhile. */
@@ -242,7 +236,7 @@ export class SubagentManager implements Background {
 
   /** A model-written summary, reused while the transcript has not grown. */
   async summary(id: string): Promise<string> {
-    const child = this.get(id);
+    const child = this.finished(id);
     const entries = transcriptEntries(child.session.messages);
     if (child.summary?.covers === entries.length) return child.summary.text;
     const text = await this.options.summarize(
@@ -254,7 +248,7 @@ export class SubagentManager implements Background {
   }
 
   transcript(id: string, from: number, count: number): { entries: string[]; total: number } {
-    const all = transcriptEntries(this.get(id).session.messages);
+    const all = transcriptEntries(this.finished(id).session.messages);
     return { entries: all.slice(from, from + count), total: all.length };
   }
 
@@ -271,7 +265,7 @@ export class SubagentManager implements Background {
     child.settled = this.whenFree(child)
       .then((slot) => this.run(child, slot, text))
       .then(() => {
-        if (child.status === 'done' || child.status === 'failed') this.unseen.add(child);
+        if (child.status === 'done' || child.status === 'failed') this.resolved.push(child);
         this.newsListener?.();
       });
   }
@@ -394,11 +388,7 @@ export function subagentToolNames(): string[] {
 
 function subagentTools(manager: SubagentManager): AgentTool[] {
   const id = z.string().describe('The subagent id, such as "sa-1"');
-  /** View a child for a tool that reports how it stands, which makes that no longer news. */
-  const show = (child: Subagent) => {
-    manager.seen(child);
-    return view(child);
-  };
+
   const tools = [
     defineTool({
       name: 'spawn_subagent',
@@ -415,47 +405,32 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       }),
       execute: ({ name, task, tools }, context) => {
         context.commit();
+        const before = manager.select().length;
         const child = manager.spawn(name, task, tools);
-        return { ...view(child), tools: child.tools };
-      },
-    }),
-    defineTool({
-      name: 'list_subagents',
-      description: 'List the subagents this session has started, with their status.',
-      kind: 'internal',
-      schema: z.object({}),
-      execute: () => ({ subagents: manager.select().map(show) }),
-    }),
-    defineTool({
-      name: 'subagent_status',
-      description:
-        'Where one subagent stands: queued, running, done, failed or cancelled, what it is running now, and its answer once done.',
-      kind: 'internal',
-      schema: z.object({ id }),
-      execute: ({ id }) => {
-        const child = manager.get(id);
+        const already = manager.select().length === before;
         return {
-          ...show(child),
-          task: child.task,
-          ...(child.answer ? { answer: child.answer } : {}),
+          ...view(child),
+          tools: child.tools,
+          ...(already ? { note: 'A subagent was already on this task; this is it.' } : {}),
+          next: SUBAGENT_STARTED,
         };
       },
     }),
     defineTool({
       name: 'subagent_summary',
       description:
-        "A short written summary of a subagent's work so far: what it did, found and could not do.",
+        "A short written summary of a finished subagent's work: what it did, found and could not do.",
       kind: 'internal',
       schema: z.object({ id }),
       execute: async ({ id }, context) => ({
-        ...show(manager.get(id)),
+        ...view(manager.get(id)),
         summary: await context.untimed(manager.summary(id)),
       }),
     }),
     defineTool({
       name: 'read_subagent_transcript',
       description:
-        "Read part of a subagent's transcript in detail: numbered entries of its calls, results and answers. Page through with from.",
+        "Read part of a finished subagent's transcript in detail: numbered entries of its calls, results and answers. Page through with from.",
       kind: 'internal',
       schema: z.object({
         id,
@@ -465,33 +440,9 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       execute: ({ id, from, count }) => manager.transcript(id, from, count),
     }),
     defineTool({
-      name: 'wait_for_subagents',
-      description:
-        'Wait until subagents finish, instead of checking their status repeatedly. Returns their status when all (or any) are done, or when the timeout passes.',
-      kind: 'internal',
-      schema: z.object({
-        ids: z.array(z.string()).optional().describe('Which to wait for; all of them by default'),
-        mode: z.enum(['all', 'any']).default('all').describe('Wait for all, or for the first'),
-        timeoutSeconds: z
-          .number()
-          .int()
-          .min(1)
-          .max(MAX_WAIT_SECONDS)
-          .default(120)
-          .describe('Longest to wait'),
-      }),
-      execute: async ({ ids, mode, timeoutSeconds }, context) => {
-        const children = manager.select(ids);
-        const finished = await context.untimed(
-          manager.wait(children, mode, timeoutSeconds * 1000, context.signal)
-        );
-        return { finished, subagents: children.map(show) };
-      },
-    }),
-    defineTool({
       name: 'message_subagent',
       description:
-        'Send a subagent a follow-up message: more to do, a correction, or a question about its work. One still running reads it after its current step of work; one that has finished starts again on it, keeping its conversation so far. Use wait_for_subagents for its reply.',
+        'Send a subagent a follow-up message: more to do, a correction, or a question about its work. One still running reads it after its current step of work; one that has finished starts again on it, keeping its conversation so far. Its reply comes as a message of its own when it finishes.',
       kind: 'internal',
       schema: z.object({
         id,
@@ -500,7 +451,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       execute: ({ id, message }, context) => {
         // A finished child starts a new turn: replaying the call would start it twice.
         context.commit();
-        return view(manager.message(id, message));
+        return { ...view(manager.message(id, message)), next: SUBAGENT_STARTED };
       },
     }),
     defineTool({
@@ -508,7 +459,7 @@ function subagentTools(manager: SubagentManager): AgentTool[] {
       description: 'Stop a subagent that is queued or running.',
       kind: 'internal',
       schema: z.object({ id }),
-      execute: ({ id }) => show(manager.cancel(id)),
+      execute: ({ id }) => view(manager.cancel(id)),
     }),
   ];
   return tools as AgentTool[];

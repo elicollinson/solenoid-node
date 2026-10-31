@@ -16,7 +16,8 @@
  *
  * Turns run one at a time: a send while one is running waits its turn. A
  * session with background work (its subagents) also starts turns itself,
- * when that work has news the model has not seen: see `onAutoTurn`.
+ * when that work has news: see `onAutoTurn`. While the work runs, the
+ * model's copy of each opening message ends with its status.
  */
 import type { AGUIEvent, Interrupt, Message, ResumeEntry } from '@ag-ui/core';
 import type { ToolVerdict } from '@elicollinson/solenoid-security';
@@ -76,6 +77,11 @@ export interface Background {
   idle(): Promise<void>;
   /** Call `listener` whenever there may be news. */
   onNews(listener: () => void): void;
+  /**
+   * Where the work stands, while any runs: added to the model's copy of
+   * every message that opens a turn, so its picture stays current.
+   */
+  status(): string | undefined;
 }
 
 type OpeningRole = 'user' | 'developer';
@@ -202,7 +208,11 @@ export class Session {
     role: OpeningRole,
     { onEvent, signal, origin = 'operator' }: SendOptions
   ): Promise<string> {
-    const user: ChatMessage = { role: 'user', content: text, origin };
+    // In the same message rather than one of its own: some chat templates
+    // (Gemma's) refuse two user messages in a row.
+    const status = this.options.background?.status();
+    const content = status ? `${text}\n\n${status}` : text;
+    const user: ChatMessage = { role: 'user', content, origin };
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
