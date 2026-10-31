@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ScreeningResult, TextInput } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
+import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
 import {
   Agent,
   AgentAbortedError,
@@ -16,35 +17,6 @@ import {
   PromptInjectionScreeningError,
   defineTool,
 } from '../../src/core/index.js';
-
-type Step = ChatMessage | Error | ((messages: ChatMessage[], opts: ChatOptions) => ChatMessage);
-
-/** Answers each call with the next scripted step, streaming text as deltas. */
-class ScriptedProvider implements ChatProvider {
-  readonly calls: ChatMessage[][] = [];
-
-  constructor(
-    readonly providerName: string,
-    private readonly steps: Step[]
-  ) {}
-
-  async chat(messages: ChatMessage[], opts: ChatOptions): Promise<ChatMessage> {
-    this.calls.push(messages.map((m) => ({ ...m })));
-    const step = this.steps.shift();
-    if (!step) throw new Error(`${this.providerName}: script exhausted`);
-    if (step instanceof Error) throw step;
-    const msg = typeof step === 'function' ? step(messages, opts) : step;
-    if (msg.content) opts.onDelta?.({ type: 'text', text: msg.content });
-    return msg;
-  }
-}
-
-const say = (content: string): ChatMessage => ({ role: 'assistant', content });
-const call = (name: string, args: unknown, id = `call_${name}`): ChatMessage => ({
-  role: 'assistant',
-  content: '',
-  toolCalls: [{ id, name, arguments: args }],
-});
 
 function allow(input: TextInput): ScreeningResult {
   return {
@@ -540,5 +512,68 @@ describe('Structured output', () => {
     expect(output).toEqual({ answer: 42 });
     const rejection = provider.calls[1]!.find((m) => m.role === 'tool');
     expect(rejection?.content).toStartWith('Result rejected:');
+  });
+});
+
+describe('Display tools', () => {
+  const chart = defineTool({
+    name: 'show_thing',
+    description: 'Show a thing.',
+    kind: 'display',
+    schema: z.object({ label: z.string() }),
+    execute: ({ label }) => ({ label }),
+  });
+
+  test('a turn that answers and displays ends the run', async () => {
+    const turn: ChatMessage = {
+      role: 'assistant',
+      content: 'Here it is.',
+      toolCalls: [{ id: 'd1', name: 'show_thing', arguments: { label: 'x' } }],
+    };
+    const provider = new ScriptedProvider('fake', [turn]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
+    const events: AgentEvent[] = [];
+
+    const result = await agent.runMessages([{ role: 'user', content: 'go' }], {
+      onEvent: (e) => events.push(e),
+    });
+
+    expect(result.output).toBe('Here it is.');
+    expect(provider.calls).toHaveLength(1);
+    expect(events.find((e) => e.type === 'display')).toEqual({
+      type: 'display',
+      id: 'd1',
+      name: 'show_thing',
+      content: { label: 'x' },
+    });
+    expect(result.messages.at(-1)).toMatchObject({ role: 'tool', content: 'Shown to the person in the chat.' });
+  });
+
+  test('a display with no answer yet lets the model write one', async () => {
+    const provider = new ScriptedProvider('fake', [
+      call('show_thing', { label: 'x' }),
+      say('That chart shows x.'),
+    ]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [chart] });
+
+    expect(await agent.run('go')).toBe('That chart shows x.');
+    expect(provider.calls).toHaveLength(2);
+  });
+
+  test('a display tool that returns no object fails the call', async () => {
+    const broken = defineTool({
+      name: 'show_broken',
+      description: 'Broken.',
+      kind: 'display',
+      schema: z.object({}),
+      execute: () => 'not an object',
+    });
+    const provider = new ScriptedProvider('fake', [call('show_broken', {}), say('sorry')]);
+    const agent = new Agent({ routes: [{ client: provider, model: 'm' }], tools: [broken] });
+
+    expect(await agent.run('go')).toBe('sorry');
+    expect(provider.calls[1]!.find((m) => m.role === 'tool')?.content).toContain(
+      'must return an object'
+    );
   });
 });

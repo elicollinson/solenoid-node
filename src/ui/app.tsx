@@ -2,20 +2,21 @@
  * Main App Component
  *
  * Root React component for the terminal UI. Uses React Suspense while the
- * harness starts (MCP servers connect), then runs one conversation session:
- * streams the agent's events into the message list, pauses for approval
- * before write tools, and aborts the run on the interrupt key.
+ * harness starts (MCP servers connect), then runs one conversation session
+ * as an AG-UI client: every event is folded into the thread with the shared
+ * reducer (../harness/ag-ui/reducer.ts), the message list is a view of that
+ * thread, an interrupt opens the approval prompt and its answer resumes the
+ * run, and the interrupt key aborts it.
  *
  * Dependencies:
  * - ink: React-based terminal UI framework
  * - React Suspense: Handles loading state during harness initialization
  */
-import type { ToolVerdict } from '@elicollinson/solenoid-security';
+import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useRef, useState } from 'react';
-import { clearArtifacts } from '../artifacts/index.js';
-import { AgentAbortedError, type AgentEvent, type ApprovalRequest } from '../core/index.js';
-import { declinedMessage, describeRunError } from '../harness/index.js';
+import { Suspense, useMemo, useRef, useState } from 'react';
+import { AgentAbortedError } from '../core/index.js';
+import { APPROVAL_REASON, CUSTOM_EVENTS, applyEvent, describeRunError } from '../harness/index.js';
 import { uiLogger } from '../utils/logger.js';
 import { ApprovalPrompt, type PendingApproval } from './components/ApprovalPrompt.js';
 import {
@@ -24,21 +25,37 @@ import {
   Header,
   HelpScreen,
   LoadingScreen,
-  type Message,
   MessageList,
-  type MessagePart,
   SettingsScreen,
   StatusBar,
 } from './components/index.js';
 import { useAgent } from './hooks/index.js';
+import { type Notice, type ViewCache, toView } from './thread.js';
 
 type Screen = 'chat' | 'settings' | 'help';
 
-/** How much of the streaming reasoning is drawn. */
-const REASONING_TAIL_CHARS = 600;
-
 interface ApprovalState extends PendingApproval {
-  resolve: (allow: boolean) => void;
+  interruptId: string;
+}
+
+/** The tool call an approval interrupt is about, from the thread. */
+function approvalFor(
+  thread: readonly AgUiMessage[],
+  interruptId: string,
+  toolCallId?: string,
+  message?: string
+): ApprovalState {
+  for (const m of thread) {
+    if (m.role !== 'assistant') continue;
+    const call = m.toolCalls?.find((c) => c.id === toolCallId);
+    if (!call) continue;
+    let args: unknown = call.function.arguments;
+    try {
+      args = JSON.parse(call.function.arguments);
+    } catch {}
+    return { interruptId, tool: call.function.name, description: message ?? '', args };
+  }
+  return { interruptId, tool: 'a tool', description: message ?? '', args: {} };
 }
 
 function formatInterruptHint(interruptKey: string): string {
@@ -70,16 +87,24 @@ function AppContent() {
   const { exit } = useApp();
   const { harness, session } = useAgent(); // Suspends until the harness is ready
 
-  const [messages, setMessages] = useState<Message[]>(() =>
-    harness.warnings.map((content) => ({ id: crypto.randomUUID(), role: 'system', content }))
+  const [thread, setThread] = useState<AgUiMessage[]>([]);
+  const [notices, setNotices] = useState<Notice[]>(() =>
+    harness.warnings.map((text) => ({ id: crypto.randomUUID(), text, at: 0 }))
   );
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('Ready');
   const [screen, setScreen] = useState<Screen>('chat');
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const threadRef = useRef<AgUiMessage[]>([]);
+  const viewCache = useRef<ViewCache>(new Map());
   const interruptKey = harness.settings.keyboard.interrupt;
   const showReasoning = harness.settings.display.show_reasoning;
+
+  const messages = useMemo(
+    () => toView(thread, notices, { streaming: isProcessing, showReasoning }, viewCache.current),
+    [thread, notices, isProcessing, showReasoning]
+  );
 
   // Keep stdin ref'd so the process doesn't exit while idle. Ink 6's
   // useInput cleanup unrefs stdin, and an always-active no-op handler
@@ -110,8 +135,16 @@ function AppContent() {
     { isActive: isProcessing && screen === 'chat' && !approval }
   );
 
-  const addSystemMessage = (content: string) => {
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'system', content }]);
+  const addSystemMessage = (text: string) => {
+    setNotices((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), text, at: threadRef.current.length },
+    ]);
+  };
+
+  const fold = (event: AGUIEvent) => {
+    threadRef.current = applyEvent(threadRef.current, event);
+    setThread(threadRef.current);
   };
 
   const handleSlashCommand = (command: string): void => {
@@ -124,9 +157,11 @@ function AppContent() {
         setScreen('settings');
         return;
       case '/clear':
-        setMessages([]);
+        threadRef.current = [];
+        setThread([]);
+        setNotices([]);
+        viewCache.current.clear();
         session.clear();
-        clearArtifacts();
         return;
       case '/quit':
       case '/exit':
@@ -149,6 +184,58 @@ function AppContent() {
     }
   };
 
+  const onEvent = (event: AGUIEvent): void => {
+    fold(event);
+    switch (event.type) {
+      case EventType.STEP_STARTED:
+        setStatus('Thinking...');
+        break;
+      case EventType.TEXT_MESSAGE_CONTENT:
+        setStatus('Writing...');
+        break;
+      case EventType.TOOL_CALL_START:
+        setStatus(`Running: ${event.toolCallName}`);
+        break;
+      case EventType.CUSTOM:
+        if (event.name === CUSTOM_EVENTS.retry) {
+          setStatus(`Retrying (${event.value.error})...`);
+        } else if (event.name === CUSTOM_EVENTS.routeAdvanced) {
+          setStatus(
+            `${event.value.from.provider} failed; switching to ${event.value.to.provider}...`
+          );
+        } else if (event.name === CUSTOM_EVENTS.guardrail && event.value.decision === 'observe') {
+          setStatus('Screen flagged your message; continuing');
+        }
+        break;
+      case EventType.RUN_FINISHED: {
+        const interrupt =
+          event.outcome?.type === 'interrupt'
+            ? event.outcome.interrupts.find((i) => i.reason === APPROVAL_REASON)
+            : undefined;
+        if (interrupt) {
+          const pending = approvalFor(
+            threadRef.current,
+            interrupt.id,
+            interrupt.toolCallId,
+            interrupt.message
+          );
+          setApproval(pending);
+          setStatus(`Waiting for approval: ${pending.tool}`);
+        }
+        break;
+      }
+    }
+  };
+
+  const answerApproval = (allow: boolean) => {
+    if (!approval) return;
+    setApproval(null);
+    setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
+    session.resume([
+      { interruptId: approval.interruptId, status: 'resolved', payload: { approved: allow } },
+    ]);
+  };
+
   const handleSubmit = async (text: string) => {
     uiLogger.info({ text }, 'handleSubmit called');
 
@@ -157,169 +244,23 @@ function AppContent() {
       return;
     }
 
-    // Clear artifact store from previous turn
-    clearArtifacts();
-
-    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: text };
-    const assistantMessageId = crypto.randomUUID();
-    setMessages((prev) => [
-      ...prev,
-      userMessage,
-      { id: assistantMessageId, role: 'assistant', content: '', isStreaming: true, parts: [] },
-    ]);
+    const messageId = crypto.randomUUID();
+    fold({
+      type: EventType.MESSAGES_SNAPSHOT,
+      messages: [...threadRef.current, { id: messageId, role: 'user', content: text }],
+    });
     setIsProcessing(true);
     setStatus('Thinking...');
-
-    // Parts of the reply as drawn. `turnStart` marks where the model call in
-    // progress began, so a retried call can drop its partial output.
-    let parts: MessagePart[] = [];
-    let turnStart = 0;
-    let reasoning = '';
-
-    const textOf = (list: MessagePart[]) =>
-      list
-        .filter((p): p is Extract<MessagePart, { type: 'text' }> => p.type === 'text')
-        .map((p) => p.content)
-        .join('');
-
-    const updateAssistant = (updates: Partial<Message> = {}): void => {
-      const snapshot = [...parts];
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? {
-                ...msg,
-                content: textOf(snapshot),
-                parts: snapshot,
-                reasoning: showReasoning ? reasoning : undefined,
-                ...updates,
-              }
-            : msg
-        )
-      );
-    };
-
-    const onEvent = (event: AgentEvent): void => {
-      switch (event.type) {
-        case 'turn_start':
-          turnStart = parts.length;
-          reasoning = '';
-          setStatus('Thinking...');
-          break;
-
-        case 'reasoning_delta':
-          if (!showReasoning) break;
-          // Only the tail is drawn (see MessageList); keep no more than that.
-          reasoning = (reasoning + event.text).slice(-REASONING_TAIL_CHARS);
-          updateAssistant();
-          break;
-
-        case 'text_delta': {
-          const last = parts[parts.length - 1];
-          if (last && last.type === 'text' && parts.length > turnStart) {
-            parts[parts.length - 1] = { type: 'text', content: last.content + event.text };
-          } else {
-            parts.push({ type: 'text', content: event.text });
-          }
-          setStatus('Writing...');
-          updateAssistant();
-          break;
-        }
-
-        case 'tool_start': {
-          const args =
-            event.args && typeof event.args === 'object'
-              ? (event.args as Record<string, unknown>)
-              : { raw: event.args };
-          parts.push({
-            type: 'tool_call',
-            toolCall: { id: event.id, name: event.name, status: 'running', args },
-          });
-          setStatus(`Running: ${event.name}`);
-          updateAssistant();
-          break;
-        }
-
-        case 'tool_end': {
-          const failed = !event.ok || event.declined;
-          const result = event.quarantined
-            ? 'output blocked: possible prompt injection'
-            : event.declined
-              ? 'declined'
-              : event.error;
-          parts = parts.map((p) =>
-            p.type === 'tool_call' && p.toolCall.id === event.id
-              ? {
-                  ...p,
-                  toolCall: {
-                    ...p.toolCall,
-                    status: failed ? 'error' : 'completed',
-                    ...(failed ? { result } : {}),
-                  },
-                }
-              : p
-          );
-          updateAssistant();
-          break;
-        }
-
-        case 'retry':
-          parts = parts.slice(0, turnStart);
-          setStatus(`Retrying (${event.error})...`);
-          updateAssistant();
-          break;
-
-        case 'route_advanced':
-          // The task restarts from scratch on the next route.
-          parts = [];
-          turnStart = 0;
-          clearArtifacts();
-          setStatus(`${event.from.provider} failed; switching to ${event.to.provider}...`);
-          updateAssistant();
-          break;
-
-        case 'guardrail':
-          if (event.decision === 'observe') {
-            setStatus('Screen flagged your message; continuing');
-          }
-          break;
-      }
-    };
-
-    const approve = (request: ApprovalRequest): Promise<ToolVerdict> =>
-      new Promise((resolve) => {
-        const finish = (allow: boolean) => {
-          request.signal.removeEventListener('abort', onAbort);
-          setApproval(null);
-          setStatus(allow ? `Running: ${request.tool}` : 'Declined');
-          resolve(
-            allow
-              ? { allow: true }
-              : { allow: false, tell: declinedMessage(request.tool, 'declined') }
-          );
-        };
-        const onAbort = () => finish(false);
-        request.signal.addEventListener('abort', onAbort, { once: true });
-        setStatus(`Waiting for approval: ${request.tool}`);
-        setApproval({
-          tool: request.tool,
-          description: request.description,
-          args: request.args,
-          resolve: finish,
-        });
-      });
 
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      await session.send(text, { signal: controller.signal, onEvent, approve });
-      updateAssistant({ isStreaming: false });
+      await session.send(text, { signal: controller.signal, onEvent, messageId });
     } catch (error) {
       if (error instanceof AgentAbortedError) {
-        updateAssistant({ isStreaming: false, wasInterrupted: true });
+        addSystemMessage('Interrupted.');
       } else {
         uiLogger.error({ error: String(error) }, 'Run failed');
-        updateAssistant({ isStreaming: false });
         addSystemMessage(describeRunError(error));
       }
     } finally {
@@ -346,7 +287,7 @@ function AppContent() {
         <MessageList messages={messages} />
       </Box>
       {approval ? (
-        <ApprovalPrompt approval={approval} onAnswer={(allow) => approval.resolve(allow)} />
+        <ApprovalPrompt approval={approval} onAnswer={answerApproval} />
       ) : (
         <ChatInput
           onSubmit={handleSubmit}

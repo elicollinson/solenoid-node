@@ -1,71 +1,32 @@
 /**
  * Message List Component
  *
- * Renders the chat conversation history with support for streaming responses,
- * tool call indicators, markdown formatting, and inline chart rendering.
- * Messages display differently based on role (user, assistant, system) with
- * distinct colors and labels.
+ * Renders the conversation: the person's messages, and each agent reply as
+ * its text, a status line per tool call, and the components its display
+ * tools showed (charts, tables), in the order they arrived. Text streams raw
+ * and renders as markdown once complete.
  *
- * Charts render inline from render_chart tool call arguments, at the point
- * in the message flow where the tool was called.
- *
- * Dependencies:
- * - marked: Markdown parser for formatting completed responses
- * - marked-terminal: Terminal-friendly renderer for markdown output
- * - ChartRenderer: Inline chart rendering component
+ * The list is a view of the AG-UI thread (see ../thread.ts); components are
+ * drawn through the catalog (./catalog.tsx).
  */
 import { Box, Text } from 'ink';
-import { marked } from 'marked';
-import { markedTerminal } from 'marked-terminal';
-import { memo, useMemo } from 'react';
-import { getArtifact } from '../../artifacts/index.js';
-import { ChartRenderer, isChartToolCall } from './ChartRenderer.js';
-
-// Configure marked with terminal renderer.
-// Patch: marked-terminal v7.3.0's text renderer returns raw text instead of
-// parsing inline tokens, so bold/italic inside list items shows as raw markdown.
-const ext = markedTerminal({
-  reflowText: true,
-  width: process.stdout.columns || 80,
-});
-const origText = ext.renderer!.text!;
-// biome-ignore lint/suspicious/noExplicitAny: marked-terminal v7 types don't expose renderer internals
-ext.renderer!.text = function (this: any, token: any) {
-  if (token?.tokens) return this.parser.parseInline(token.tokens);
-  return origText.call(this, token);
-};
-marked.use(ext);
-
-function renderMarkdown(content: string): string {
-  try {
-    const rendered = marked.parse(content);
-    // marked.parse can return string or Promise<string>, we only use sync
-    if (typeof rendered === 'string') {
-      return rendered.trim();
-    }
-    return content;
-  } catch {
-    return content;
-  }
-}
-
-function Markdown({ children }: { children: string }) {
-  const rendered = useMemo(() => renderMarkdown(children), [children]);
-  return <Text>{rendered}</Text>;
-}
+import { memo } from 'react';
+import { Markdown } from './Markdown.js';
+import { ActivityView } from './catalog.js';
 
 export interface ToolCall {
   id: string;
   name: string;
   status: 'pending' | 'running' | 'completed' | 'error';
   result?: string;
-  /** Tool arguments, used to render charts and embedded artifacts inline */
   args?: Record<string, unknown>;
 }
 
 export type MessagePart =
   | { type: 'text'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall };
+  | { type: 'tool_call'; toolCall: ToolCall }
+  /** A display component: `activityType` picks it from the catalog. */
+  | { type: 'activity'; id: string; activityType: string; content: Record<string, unknown> };
 
 export interface Message {
   id: string;
@@ -83,92 +44,31 @@ interface MessageListProps {
   maxHeight?: number;
 }
 
-function formatTableAsMarkdown(headers: string[], rows: string[][]): string {
-  const headerRow = `| ${headers.join(' | ')} |`;
-  const separator = `| ${headers.map(() => '---').join(' | ')} |`;
-  const dataRows = rows.map((row) => `| ${row.join(' | ')} |`).join('\n');
-  return `${headerRow}\n${separator}\n${dataRows}`;
-}
+const statusIcons = {
+  pending: '○',
+  running: '◐',
+  completed: '●',
+  error: '✗',
+} as const;
 
-/** The stored artifact an embed_artifact call names, drawn once the call completes. */
-function EmbedArtifactDisplay({ toolCall }: { toolCall: ToolCall }) {
-  const artifactId = toolCall.args?.artifactId as string | undefined;
-  if (!artifactId) {
-    return (
-      <Box paddingLeft={4} marginY={0}>
-        <Text color="red">embed_artifact: missing artifactId</Text>
-      </Box>
-    );
-  }
-
-  const artifact = getArtifact(artifactId);
-  if (!artifact) {
-    return (
-      <Box paddingLeft={4} marginY={0}>
-        <Text color="red">● Artifact {artifactId} not found</Text>
-      </Box>
-    );
-  }
-
-  // Table and text artifacts share the same title + content layout
-  let markdownContent: string;
-  if (artifact.type === 'table') {
-    const { headers, rows } = artifact.data as { headers: string[]; rows: string[][] };
-    markdownContent = formatTableAsMarkdown(headers, rows);
-  } else {
-    markdownContent = (artifact.data as { content: string }).content;
-  }
-
-  return (
-    <Box flexDirection="column" paddingLeft={2}>
-      {artifact.title && (
-        <Text bold color="cyan">
-          {artifact.title}
-        </Text>
-      )}
-      <Markdown>{markdownContent}</Markdown>
-    </Box>
-  );
-}
+const statusColors = {
+  pending: 'gray',
+  running: 'yellow',
+  completed: 'green',
+  error: 'red',
+} as const;
 
 function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
-  const statusIcons = {
-    pending: '○',
-    running: '◐',
-    completed: '●',
-    error: '✗',
-  } as const;
-
-  const statusColors = {
-    pending: 'gray',
-    running: 'yellow',
-    completed: 'green',
-    error: 'red',
-  } as const;
-
-  // Every call gets its status line, so each one is visible in the chat; a
-  // chart or an embedded artifact is drawn beneath its line once it completes.
-  const completed = toolCall.status === 'completed';
   return (
-    <Box flexDirection="column">
-      <Box paddingLeft={4} marginY={0}>
-        <Text color={statusColors[toolCall.status]}>
-          {statusIcons[toolCall.status]} {toolCall.name}
+    <Box paddingLeft={4} marginY={0}>
+      <Text color={statusColors[toolCall.status]}>
+        {statusIcons[toolCall.status]} {toolCall.name}
+      </Text>
+      {toolCall.result && toolCall.status === 'error' && (
+        <Text color="red" dimColor>
+          {' '}
+          - {toolCall.result}
         </Text>
-        {toolCall.result && toolCall.status === 'error' && (
-          <Text color="red" dimColor>
-            {' '}
-            - {toolCall.result}
-          </Text>
-        )}
-      </Box>
-      {completed && isChartToolCall(toolCall.name) && toolCall.args && (
-        <Box flexDirection="column" paddingLeft={2}>
-          <ChartRenderer toolArgs={toolCall.args} />
-        </Box>
-      )}
-      {completed && toolCall.name === 'embed_artifact' && (
-        <EmbedArtifactDisplay toolCall={toolCall} />
       )}
     </Box>
   );
@@ -226,6 +126,13 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: Messag
           // biome-ignore lint/suspicious/noArrayIndexKey: text parts are append-only and never reorder
           <Box key={`text-${index}`} paddingLeft={2}>
             {renderTextContent(part.content, !!message.isStreaming, showCursor)}
+          </Box>
+        );
+      }
+      if (part.type === 'activity') {
+        return (
+          <Box key={part.id} flexDirection="column" paddingLeft={2}>
+            <ActivityView activityType={part.activityType} content={part.content} />
           </Box>
         );
       }

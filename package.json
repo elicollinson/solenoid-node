@@ -40,6 +40,7 @@
     "url": "https://github.com/elicollinson/solenoid-node"
   },
   "dependencies": {
+    "@ag-ui/core": "1.0.3",
     "@arizeai/openinference-semantic-conventions": "^2",
     "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#7914c4270eeb25b47c2313eb327500a3b8c8edc6",
     "@inkjs/ui": "^2.0.0",

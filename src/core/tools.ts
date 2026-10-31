@@ -35,23 +35,28 @@ export interface FunctionToolDefinition {
  *   attempt from being replayed on another route. When it is genuinely
  *   arguable whether a tool changes anything, it is a write.
  * - `internal`: the tool touches only this process. It returns what the model
- *   sent it plus this repository's literals (a chart drawn from its
- *   arguments, a table it wrote), so like the model's own turns its output
- *   is not screened, and with nothing outside to change it never asks.
+ *   sent it plus this repository's literals, so like the model's own turns
+ *   its output is not screened, and with nothing outside to change it never
+ *   asks.
+ * - `display`: an internal tool whose result is for the person, not the
+ *   model: a chart, a table. What `execute` returns is the component's
+ *   content, reported as a `display` event; the model is told only that it
+ *   was shown. A turn that answers and only displays ends the run, since the
+ *   model has nothing new to read.
  *
- * `internal` must be claimed, and only when no byte of the output comes from
- * anywhere else. MCP tools are never internal. Anything but a write runs
- * concurrently with the other calls of its turn.
+ * `internal` and `display` must be claimed, and only when no byte of the
+ * output comes from anywhere else. MCP tools are never either. Anything but a
+ * write runs concurrently with the other calls of its turn.
  */
-export type AgentToolKind = ToolKind | 'internal';
+export type AgentToolKind = ToolKind | 'internal' | 'display';
 
 /**
  * Whether a tool reaches outside this process: its output is screened and it
- * may be put to approval. Everything but `internal`, so a kind added later is
- * screened until it says otherwise.
+ * may be put to approval. Everything but `internal` and `display`, so a kind
+ * added later is screened until it says otherwise.
  */
 export function reachesWorld(kind: AgentToolKind): kind is ToolKind {
-  return kind !== 'internal';
+  return kind !== 'internal' && kind !== 'display';
 }
 
 /**
@@ -59,6 +64,8 @@ export function reachesWorld(kind: AgentToolKind): kind is ToolKind {
  * validated: a call that fails its schema is refused before anybody is asked.
  */
 export interface ApprovalRequest extends ToolRequest {
+  /** The model's id for this call, as on its `tool_start` event. */
+  toolCallId: string;
   /** The run's signal. An approval outlives no run. */
   signal: AbortSignal;
 }

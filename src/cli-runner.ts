@@ -1,13 +1,14 @@
+import { EventType } from '@ag-ui/core';
 /**
  * Non-Interactive CLI Runner
  *
- * Executes a single prompt and writes the answer, the final turn's text, to
- * stdout once that turn completes. Status and errors go to stderr, so stdout stays pipeable. Nobody
- * is present to approve a write tool, so writes are declined unless
- * `--yes` was given.
+ * Executes a single prompt and writes the answer to stdout once the agent
+ * has given it. Status and errors go to stderr, so stdout stays pipeable.
+ * Nobody is present to answer an approval interrupt, so writes are declined
+ * unless `--yes` was given.
  */
 import { loadSettings } from './config/index.js';
-import { Session, createHarness, declinedMessage, describeRunError } from './harness/index.js';
+import { CUSTOM_EVENTS, Session, createHarness, describeRunError } from './harness/index.js';
 import { initTracing, shutdownTracing } from './telemetry/index.js';
 import { setupErrorHandlers, uiLogger } from './utils/logger.js';
 
@@ -37,37 +38,32 @@ export async function runNonInteractive(
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
 
-    // Only the final turn's text is the answer. Text written before a tool
-    // call ("Let me search for that") is narration, so only a turn without
-    // tool calls reaches stdout. A retried or abandoned turn never completes,
-    // so it never reports a turn to print.
-    let printed = false;
-    await new Session(harness.agent).send(prompt, {
+    // Nobody is here to answer an approval: --yes allows it, and otherwise
+    // it is cancelled, which the agent hears as an unattended decline.
+    const session = new Session(harness.agent);
+    const answer = await session.send(prompt, {
       signal: controller.signal,
-      approve: (request) =>
-        options.yes
-          ? { allow: true }
-          : { allow: false, tell: declinedMessage(request.tool, 'unattended') },
       onEvent: (event) => {
-        switch (event.type) {
-          case 'route_advanced':
-            process.stderr.write(
-              `${event.from.provider} failed; retrying on ${event.to.provider}\n`
-            );
-            break;
-          case 'assistant_turn':
-            if (!event.message.toolCalls?.length && event.message.content) {
-              process.stdout.write(event.message.content);
-              printed = true;
-            }
-            break;
-          case 'tool_start':
-            process.stderr.write(`· ${event.name}\n`);
-            break;
+        if (event.type === EventType.TOOL_CALL_START) {
+          process.stderr.write(`· ${event.toolCallName}\n`);
+        } else if (event.type === EventType.CUSTOM && event.name === CUSTOM_EVENTS.routeAdvanced) {
+          process.stderr.write(
+            `${event.value.from.provider} failed; retrying on ${event.value.to.provider}\n`
+          );
+        } else if (event.type === EventType.RUN_FINISHED && event.outcome?.type === 'interrupt') {
+          session.resume(
+            event.outcome.interrupts.map((interrupt) =>
+              options.yes
+                ? { interruptId: interrupt.id, status: 'resolved', payload: { approved: true } }
+                : { interruptId: interrupt.id, status: 'cancelled' }
+            )
+          );
         }
       },
     });
-    if (printed) process.stdout.write('\n');
+    // The answer is the final reply's text; text written before a tool call
+    // ("Let me search for that") is narration and stays off stdout.
+    if (answer) process.stdout.write(`${answer}\n`);
     return 0;
   } catch (error) {
     process.stderr.write(`Error: ${describeRunError(error)}\n`);

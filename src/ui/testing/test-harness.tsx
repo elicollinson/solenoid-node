@@ -1,3 +1,4 @@
+import { EventType } from '@ag-ui/core';
 import { TextInput } from '@inkjs/ui';
 import { Box, Text, useInput } from 'ink';
 /**
@@ -17,6 +18,7 @@ import type React from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
+import { CUSTOM_EVENTS } from '../../harness/ag-ui/encoder.js';
 import { MockAgent } from './mock-agent.js';
 import type {
   AgentEvent,
@@ -90,25 +92,40 @@ class RealAgentWrapper implements AgentInterface {
 
     session
       .send(input, {
-        approve: () => ({ allow: true }),
         onEvent: (event) => {
           switch (event.type) {
-            case 'text_delta':
-              push({ type: 'text', content: event.text });
+            case EventType.TEXT_MESSAGE_CONTENT:
+              push({ type: 'text', content: event.delta });
               break;
-            case 'tool_start':
-              push({ type: 'tool_start', toolCallId: event.id, toolName: event.name });
+            case EventType.TOOL_CALL_START:
               push({
-                type: 'tool_args',
-                toolCallId: event.id,
-                toolArgs: JSON.stringify(event.args),
+                type: 'tool_start',
+                toolCallId: event.toolCallId,
+                toolName: event.toolCallName,
               });
               break;
-            case 'tool_end':
-              push({ type: 'tool_end', toolCallId: event.id });
+            case EventType.TOOL_CALL_ARGS:
+              push({ type: 'tool_args', toolCallId: event.toolCallId, toolArgs: event.delta });
               break;
-            case 'route_advanced':
-              push({ type: 'status', content: `Switching to ${event.to.provider}` });
+            case EventType.TOOL_CALL_RESULT:
+              push({ type: 'tool_end', toolCallId: event.toolCallId });
+              break;
+            case EventType.CUSTOM:
+              if (event.name === CUSTOM_EVENTS.routeAdvanced) {
+                push({ type: 'status', content: `Switching to ${event.value.to.provider}` });
+              }
+              break;
+            case EventType.RUN_FINISHED:
+              // Tests run unattended with every write allowed.
+              if (event.outcome?.type === 'interrupt') {
+                session.resume(
+                  event.outcome.interrupts.map((i) => ({
+                    interruptId: i.id,
+                    status: 'resolved' as const,
+                    payload: { approved: true },
+                  }))
+                );
+              }
               break;
           }
         },

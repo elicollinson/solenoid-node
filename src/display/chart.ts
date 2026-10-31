@@ -1,18 +1,97 @@
 /**
- * Chart Argument Parsing
+ * Chart Component
  *
- * Turns render_chart tool arguments (data arrays arrive as JSON strings) into
- * a ChartConfig. The UI renders charts from the tool call's arguments, so the
- * tool in ../tools/chart.ts and the renderer share this one parser.
+ * The content of a `solenoid.chart` display: one of four chart types, as a
+ * zod schema every surface validates against before drawing. render_chart
+ * (../tools/chart.ts) builds it from the model's arguments with
+ * parseChartArgs, whose data arrays arrive as JSON strings.
  */
+import { z } from 'zod';
+
+const ColorSchema = z.string().optional();
+
+const BarChartSchema = z.object({
+  chartType: z.literal('bar'),
+  title: z.string().optional(),
+  data: z.array(z.object({ label: z.string(), value: z.number(), color: ColorSchema })).min(1),
+  sort: z.enum(['none', 'asc', 'desc']).optional(),
+  showValue: z.enum(['right', 'inside', 'none']).optional(),
+  width: z.number().int().positive().optional(),
+});
+
+const StackedBarChartSchema = z.object({
+  chartType: z.literal('stackedBar'),
+  title: z.string().optional(),
+  data: z.array(z.object({ label: z.string(), value: z.number(), color: ColorSchema })).min(1),
+  mode: z.enum(['percentage', 'absolute']).optional(),
+  showLabels: z.boolean().optional(),
+  showValues: z.boolean().optional(),
+  width: z.number().int().positive().optional(),
+});
+
+const LineGraphSchema = z.object({
+  chartType: z.literal('line'),
+  title: z.string().optional(),
+  series: z
+    .array(
+      z.object({
+        label: z.string().optional(),
+        data: z.array(z.number()).min(1),
+        color: ColorSchema,
+      })
+    )
+    .min(1),
+  height: z.number().int().positive().optional(),
+  /** Columns. Without one, ink-chart draws one column per data point. */
+  width: z.number().int().positive().optional(),
+  showYAxis: z.boolean().optional(),
+  xLabels: z.array(z.string()).optional(),
+  yDomain: z.tuple([z.number(), z.number()]).optional(),
+});
+
+const SparklineSchema = z.object({
+  chartType: z.literal('sparkline'),
+  title: z.string().optional(),
+  data: z.array(z.number()).min(1),
+  colorScheme: z.enum(['red', 'blue', 'green']).optional(),
+  mode: z.enum(['block', 'braille']).optional(),
+  threshold: z.number().optional(),
+});
+
+export const ChartContentSchema = z.discriminatedUnion('chartType', [
+  BarChartSchema,
+  StackedBarChartSchema,
+  LineGraphSchema,
+  SparklineSchema,
+]);
+
+export type ChartContent = z.infer<typeof ChartContentSchema>;
+export type BarChartConfig = z.infer<typeof BarChartSchema>;
+export type StackedBarChartConfig = z.infer<typeof StackedBarChartSchema>;
+export type LineGraphConfig = z.infer<typeof LineGraphSchema>;
+export type SparklineConfig = z.infer<typeof SparklineSchema>;
 
 /**
- * Parse chart tool arguments into a structured config object.
- * Handles JSON parsing of data arrays and converts string numbers.
+ * Parse render_chart arguments into chart content, or say what is wrong with
+ * them in terms the model can act on.
  */
 export function parseChartArgs(args: Record<string, unknown>): {
   success: boolean;
-  config?: import('./types.js').ChartConfig;
+  config?: ChartContent;
+  error?: string;
+} {
+  const built = assembleChart(args);
+  if (!built.success) return { success: false, error: built.error };
+  const checked = ChartContentSchema.safeParse(built.config);
+  return checked.success
+    ? { success: true, config: checked.data }
+    : { success: false, error: `Invalid chart data:\n${z.prettifyError(checked.error)}` };
+}
+
+/** The arguments' JSON strings decoded into a candidate, checked by the caller. */
+function assembleChart(args: Record<string, unknown>): {
+  success: boolean;
+  config?: unknown;
   error?: string;
 } {
   try {

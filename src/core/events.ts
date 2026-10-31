@@ -43,6 +43,11 @@ export type AgentEvent =
   /** A turn finished and was added to the transcript. */
   | { type: 'assistant_turn'; message: ChatMessage }
   | { type: 'tool_start'; id: string; name: string; kind: AgentToolKind | 'unknown'; args: unknown }
+  /**
+   * A display tool's content, for the person. `id` is the tool call's; `name`
+   * is the tool's, which a surface maps to the component that draws it.
+   */
+  | { type: 'display'; id: string; name: string; content: Record<string, unknown> }
   | ({ type: 'tool_end'; id: string; name: string; durationMs: number } & ToolOutcome)
   /** The turn in progress failed transiently and will be re-requested. Discard its partial output. */
   | { type: 'retry'; turn: number; delayMs: number; error: string }

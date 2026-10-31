@@ -74,6 +74,8 @@ export const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
  */
 export const DEFAULT_MAX_TURNS = 25;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
+/** What the model is told after a display tool's content reached the person. */
+const DISPLAY_NOTICE = 'Shown to the person in the chat.';
 /** What the model is told in place of a quarantined tool output. */
 const QUARANTINE_NOTICE = 'Error: Prompt injection detected in tool output; output blocked.';
 
@@ -467,15 +469,17 @@ export class Agent {
         // concurrently, screens included. A write waits for the calls before
         // it and holds back the ones after, because it may stop for approval
         // and commits the attempt.
-        const outputs: Array<Promise<string>> = [];
-        let reads: Array<Promise<string>> = [];
+        const outputs: Array<Promise<ToolOutcome>> = [];
+        let reads: Array<Promise<ToolOutcome>> = [];
         let reviewerFeedback: string | undefined;
+        const told = (output: string): Promise<ToolOutcome> =>
+          Promise.resolve({ ok: true, output });
 
         for (const call of msg.toolCalls) {
           if (submitDefinition && schema && call.name === SUBMIT_RESULT_TOOL_NAME) {
             if (msg.toolCalls.length > 1) {
               outputs.push(
-                Promise.resolve(
+                told(
                   'Result deferred because this turn requested additional tools. ' +
                     'Use their results, then submit the final result in its own turn.'
                 )
@@ -484,13 +488,13 @@ export class Agent {
             }
             const parsed = schema.safeParse(call.arguments);
             if (!parsed.success) {
-              outputs.push(Promise.resolve(`Result rejected: ${z.prettifyError(parsed.error)}`));
+              outputs.push(told(`Result rejected: ${z.prettifyError(parsed.error)}`));
               continue;
             }
             const submitted = JSON.stringify(parsed.data);
             reviewerFeedback = await this.reviewFeedback(messages, submitted, attempt);
             if (!reviewerFeedback) return submitted;
-            outputs.push(Promise.resolve(`Result rejected: ${reviewerFeedback}`));
+            outputs.push(told(`Result rejected: ${reviewerFeedback}`));
             continue;
           }
 
@@ -510,9 +514,22 @@ export class Agent {
 
         const results = await Promise.all(outputs);
         msg.toolCalls.forEach((call, i) => {
-          pushToolResult(messages, call.id, call.name, results[i]!);
+          pushToolResult(messages, call.id, call.name, results[i]!.output);
         });
         if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
+
+        // A turn that answered and only displayed things is the answer: the
+        // model would read back nothing but "shown", and asked to go on it
+        // redraws and rewrites what it already said.
+        const answered = msg.content.trim();
+        const onlyShown = msg.toolCalls.every(
+          (call, i) => this.tools.get(call.name)?.kind === 'display' && results[i]!.ok
+        );
+        if (answered && onlyShown && !schema) {
+          const feedback = await this.reviewFeedback(messages, answered, attempt);
+          if (!feedback) return answered;
+          messages.push({ role: 'system', content: feedback });
+        }
         continue;
       }
 
@@ -561,8 +578,8 @@ export class Agent {
     }
   }
 
-  /** Run one tool call, reporting its start and end. Resolves to what the model is told. */
-  private async runToolCall(call: ToolCall, attempt: Attempt): Promise<string> {
+  /** Run one tool call, reporting its start and end. Resolves to its outcome. */
+  private async runToolCall(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
     const { id, name } = call;
     attempt.emit({
       type: 'tool_start',
@@ -572,7 +589,7 @@ export class Agent {
       args: call.arguments,
     });
     const started = performance.now();
-    const result = await this.invokeTool(name, call.arguments, attempt);
+    const result = await this.invokeTool(call, attempt);
     const durationMs = Math.round(performance.now() - started);
     // A failure is logged with what was sent: the record a person needs to
     // see why a call keeps failing. Successes stay one short line.
@@ -591,7 +608,7 @@ export class Agent {
       );
     }
     attempt.emit({ type: 'tool_end', id, name, durationMs, ...result });
-    return result.output;
+    return result;
   }
 
   /**
@@ -630,7 +647,8 @@ export class Agent {
     return failed.map(({ name, review }) => `${name} Feedback: ${review.feedback}`).join('\n');
   }
 
-  private async invokeTool(name: string, rawArgs: unknown, attempt: Attempt): Promise<ToolOutcome> {
+  private async invokeTool(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
+    const { id, name, arguments: rawArgs } = call;
     const tool = this.tools.get(name);
     if (!tool) return failed(`unknown tool "${name}"`);
 
@@ -664,6 +682,7 @@ export class Agent {
             const gate = attempt.approve ?? currentToolGate();
             const verdict = await gate?.({
               tool: name,
+              toolCallId: id,
               kind: tool.kind,
               args,
               description: tool.definition.function.description,
@@ -685,6 +704,15 @@ export class Agent {
             Promise.resolve(tool.execute(args, { signal: attempt.signal })),
             attempt.signal
           );
+          if (tool.kind === 'display') {
+            // The content goes to the person; the model hears that it arrived.
+            if (!result || typeof result !== 'object' || Array.isArray(result)) {
+              throw new Error('a display tool must return an object of component content');
+            }
+            attempt.emit({ type: 'display', id, name, content: result as Record<string, unknown> });
+            span.setAttribute(SemanticConventions.OUTPUT_VALUE, safeJson(result));
+            return { ok: true, output: DISPLAY_NOTICE };
+          }
           const output = typeof result === 'string' ? result : JSON.stringify(result);
           // An internal tool's output is the model's own text. The screen
           // subtracts what this repository wrote and judges the rest.

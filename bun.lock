@@ -5,6 +5,7 @@
     "": {
       "name": "solenoid-node",
       "dependencies": {
+        "@ag-ui/core": "1.0.3",
         "@arizeai/openinference-semantic-conventions": "^2",
         "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#7914c4270eeb25b47c2313eb327500a3b8c8edc6",
         "@inkjs/ui": "^2.0.0",
@@ -40,6 +41,8 @@
     "@biomejs/biome",
   ],
   "packages": {
+    "@ag-ui/core": ["@ag-ui/core@1.0.3", "", { "peerDependencies": { "zod": "^3.25.18 || ^4.0.0" }, "optionalPeers": ["zod"] }, "sha512-HdMdZPOqworKlnzLaNktnbNYgIzOPbzt5ow6J4bPhbmHCdpWpCSZQFgkifQkn1zVHgCK1V+pmKc8xtW6FsQZKA=="],
+
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.2.5", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-3NX/MpTdroi0aKz134A6RC2Gb2iXVECN4QaAXnvCIxxIm3C3AVB1mkUe8NaaiyvOpDfsrqWhYtj+Q6a62RrTsw=="],
 
     "@arizeai/openinference-semantic-conventions": ["@arizeai/openinference-semantic-conventions@2.15.0", "", {}, "sha512-apIjbl1CqPEXPfvft5rNn7VpxjbktkvAwOJMhhrl6OMsSBwiOK7uf5qFFz0RI3IePa3xldn7TmiAkJMiRN2hug=="],

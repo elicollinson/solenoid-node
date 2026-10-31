@@ -2,25 +2,21 @@ import { BarChart, LineGraph, Sparkline, StackedBarChart } from '@pppp606/ink-ch
 /**
  * Chart Renderer Component
  *
- * Renders charts inline in the chat using ink-chart components.
- * Supports bar charts, stacked bar charts, line graphs, and sparklines.
- *
- * AG-UI Protocol Compliance:
- * - Receives chart configuration from tool call arguments
- * - Renders charts based on the structured data
- * - Charts appear inline in the message flow
+ * Draws `solenoid.chart` content (../../display/chart.ts) with ink-chart: bar
+ * charts, stacked bar charts, line graphs and sparklines. The catalog
+ * (./catalog.tsx) validates the content before it gets here.
  */
 import { Box, Text } from 'ink';
-import { parseChartArgs } from '../../charts/index.js';
 import type {
   BarChartConfig,
+  ChartContent,
   LineGraphConfig,
   SparklineConfig,
   StackedBarChartConfig,
-} from '../../charts/types.js';
+} from '../../display/index.js';
 
 interface ChartRendererProps {
-  toolArgs: Record<string, unknown>;
+  config: ChartContent;
 }
 
 /**
@@ -178,19 +174,7 @@ function RenderSparkline({ config }: { config: SparklineConfig }) {
 /**
  * Main chart renderer that dispatches to the appropriate chart component
  */
-export function ChartRenderer({ toolArgs }: ChartRendererProps) {
-  const result = parseChartArgs(toolArgs);
-
-  if (!result.success || !result.config) {
-    return (
-      <Box borderStyle="single" borderColor="red" paddingX={1}>
-        <Text color="red">Chart Error: {result.error || 'Unknown error'}</Text>
-      </Box>
-    );
-  }
-
-  const config = result.config;
-
+export function ChartRenderer({ config }: ChartRendererProps) {
   return (
     <Box
       flexDirection="column"
@@ -206,11 +190,4 @@ export function ChartRenderer({ toolArgs }: ChartRendererProps) {
       {config.chartType === 'sparkline' && <RenderSparkline config={config} />}
     </Box>
   );
-}
-
-/**
- * Check if a tool call is a chart render call
- */
-export function isChartToolCall(toolName: string): boolean {
-  return toolName === 'render_chart';
 }
