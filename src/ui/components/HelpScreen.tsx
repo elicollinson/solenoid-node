@@ -2,7 +2,7 @@
  * Help Screen Component
  *
  * Overlay screen displaying available commands, keyboard shortcuts, and
- * agent descriptions. Closes on Enter or Escape key press.
+ * the agent's capabilities. Closes on Enter or Escape key press.
  */
 import { Box, Text, useInput } from 'ink';
 
@@ -30,8 +30,8 @@ export function HelpScreen({ onClose }: HelpScreenProps) {
         <Box paddingLeft={2} flexDirection="column">
           <Text>/help - Show this help screen</Text>
           <Text>/settings - View current settings</Text>
-          <Text>/clear - Clear message history</Text>
-          <Text>/agents - List available agents</Text>
+          <Text>/clear - Clear the conversation</Text>
+          <Text>/tools - Show model routes, screening and tools</Text>
           <Text>/quit - Exit the application</Text>
         </Box>
       </Box>
@@ -42,23 +42,21 @@ export function HelpScreen({ onClose }: HelpScreenProps) {
         </Text>
         <Box paddingLeft={2} flexDirection="column">
           <Text>Ctrl+C - Quit application</Text>
-          <Text>Ctrl+L - Clear message history</Text>
           <Text>Enter - Send message</Text>
-          <Text>Esc - Interrupt agent response</Text>
+          <Text>Esc - Interrupt agent response (configurable: keyboard.interrupt)</Text>
+          <Text>y / n - Allow or decline a tool that changes something</Text>
           <Text>Esc - Close overlay screens</Text>
         </Box>
       </Box>
 
       <Box marginTop={1} flexDirection="column">
         <Text bold color="cyan">
-          Available Agents
+          The Agent
         </Text>
         <Box paddingLeft={2} flexDirection="column">
-          <Text dimColor>research_agent - Web search and research</Text>
-          <Text dimColor>code_executor - Run Python code</Text>
-          <Text dimColor>chart_generator - Create Pygal charts</Text>
-          <Text dimColor>generic_agent - General text tasks</Text>
-          <Text dimColor>mcp_agent - External tool integrations</Text>
+          <Text dimColor>One agent with web search, page reading, charts and tables,</Text>
+          <Text dimColor>plus any MCP servers in settings. Routes fall back in order;</Text>
+          <Text dimColor>your messages, web pages and MCP results are screened for injection.</Text>
         </Box>
       </Box>
 

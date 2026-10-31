@@ -3,40 +3,35 @@
  *
  * Fetches and extracts text content from web pages. Strips HTML tags,
  * decodes entities, and cleans whitespace. Truncates content to 10,000
- * characters to stay within LLM context limits.
+ * characters to stay within LLM context limits. Failures throw, so the agent
+ * reports them as failed tool calls.
  */
-import type { ToolDefinition } from '../llm/types.js';
 import { fetchWithTimeout } from '../utils/fetch.js';
 
 const MAX_CONTENT_LENGTH = 10000;
 
 export async function readWebpage(url: string): Promise<string> {
+  let response: Response;
   try {
-    const response = await fetchWithTimeout(url, {
+    response = await fetchWithTimeout(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Solenoid/2.0; +https://github.com/solenoid)',
       },
     });
-
-    if (!response.ok) {
-      return `Error reading ${url}: HTTP ${response.status}`;
-    }
-
-    const html = await response.text();
-    const text = extractTextFromHtml(html);
-
-    if (text.length > MAX_CONTENT_LENGTH) {
-      return `${text.substring(0, MAX_CONTENT_LENGTH)}\n\n[Content truncated...]`;
-    }
-
-    return text;
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      return `Error reading ${url}: Request timed out`;
-    }
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return `Error reading ${url}: ${message}`;
+    const timedOut = error instanceof DOMException && error.name === 'AbortError';
+    const message = timedOut ? 'request timed out' : error instanceof Error ? error.message : error;
+    throw new Error(`Could not read ${url}: ${message}`);
   }
+  if (!response.ok) {
+    throw new Error(`Could not read ${url}: HTTP ${response.status}`);
+  }
+
+  const text = extractTextFromHtml(await response.text());
+  if (text.length > MAX_CONTENT_LENGTH) {
+    return `${text.substring(0, MAX_CONTENT_LENGTH)}\n\n[Content truncated...]`;
+  }
+  return text;
 }
 
 function extractTextFromHtml(html: string): string {
@@ -70,22 +65,3 @@ function extractTextFromHtml(html: string): string {
 
   return text.trim();
 }
-
-export const readWebpageToolDef: ToolDefinition = {
-  type: 'function',
-  function: {
-    name: 'read_webpage',
-    description:
-      'Reads the content of a web page and returns the text. Use this to get detailed information from a specific URL.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'The URL of the web page to read',
-        },
-      },
-      required: ['url'],
-    },
-  },
-};

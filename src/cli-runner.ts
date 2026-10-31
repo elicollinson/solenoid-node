@@ -1,108 +1,79 @@
 /**
- * CLI Runner - Non-Interactive Execution
+ * Non-Interactive CLI Runner
  *
- * Handles non-interactive prompt execution for the CLI. Initializes the
- * agent system, runs the prompt, collects output, and exits cleanly.
- *
- * Features:
- * - Plain text output to stdout
- * - Complete response before output (no streaming)
- * - Error messages to stderr
- * - Proper cleanup and exit codes
+ * Executes a single prompt and writes the answer, the final turn's text, to
+ * stdout once that turn completes. Status and errors go to stderr, so stdout stays pipeable. Nobody
+ * is present to approve a write tool, so writes are declined unless
+ * `--yes` was given.
  */
-import { LogLevel, setLogLevel } from '@google/adk';
-import { createAdkAgentHierarchy, runAgent } from './agents/index.js';
-import { ensureSettingsFile, tryLoadSettings } from './config/index.js';
+import { loadSettings } from './config/index.js';
+import { Session, createHarness, declinedMessage, describeRunError } from './harness/index.js';
 import { initTracing, shutdownTracing } from './telemetry/index.js';
-import { agentLogger } from './utils/logger.js';
+import { setupErrorHandlers, uiLogger } from './utils/logger.js';
 
-// Suppress ADK console logs — must be called before any ADK code runs
-setLogLevel((LogLevel.ERROR + 1) as unknown as LogLevel);
-
-/**
- * Run a prompt non-interactively and print output to stdout.
- *
- * @param prompt - The prompt to send to the agent
- * @returns Exit code (0 for success, 1 for error)
- */
-export async function runNonInteractive(prompt: string): Promise<number> {
-  // Initialize settings (non-fatal if missing)
-  const settingsPath = ensureSettingsFile();
-  if (!settingsPath) {
-    agentLogger.warn('No settings file found, using defaults');
-  } else {
-    agentLogger.debug({ path: settingsPath }, 'Settings file loaded');
-  }
-
-  // Initialize telemetry (optional, will be no-op if no WANDB keys)
-  initTracing();
-
-  try {
-    agentLogger.info('Initializing agent hierarchy...');
-    const { runner } = await createAdkAgentHierarchy();
-    agentLogger.info('Agent ready');
-
-    // Run the agent and collect complete response
-    const response = await collectResponse(prompt, runner);
-
-    // Print output to stdout
-    console.log(response);
-
-    agentLogger.info('Prompt completed successfully');
-    return 0;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    agentLogger.error({ error: errorMessage }, 'Prompt failed');
-
-    // Print error to stderr
-    console.error(`Error: ${errorMessage}`);
-    return 1;
-  } finally {
-    // Always cleanup telemetry
-    await shutdownTracing();
-  }
+export interface NonInteractiveOptions {
+  /** Allow write tools without asking. */
+  yes?: boolean;
 }
 
 /**
- * Run the agent and collect the complete response.
- * Waits for the full response before returning.
- * Filters out planning output and duplicate text from parent agents.
+ * Run a prompt non-interactively. Returns the process exit code.
  */
-async function collectResponse(
+export async function runNonInteractive(
   prompt: string,
-  runner: Awaited<ReturnType<typeof createAdkAgentHierarchy>>['runner']
-): Promise<string> {
-  const parts: string[] = [];
-  let seenNonPlanText = false;
+  options: NonInteractiveOptions = {}
+): Promise<number> {
+  setupErrorHandlers(uiLogger);
+  initTracing();
 
-  for await (const chunk of runAgent(prompt, runner)) {
-    switch (chunk.type) {
-      case 'text':
-        if (!chunk.content) break;
-
-        // Skip the initial planning output from planning_agent
-        if (chunk.content.startsWith('PLAN:')) {
-          break;
-        }
-
-        // After we've seen the first real content, don't collect any more
-        // This filters out duplicate text when planning_agent echoes the sub-agent's response
-        if (seenNonPlanText) {
-          break;
-        }
-
-        parts.push(chunk.content);
-        seenNonPlanText = true;
-        break;
-      case 'transfer':
-        // Transfers are informational only
-        break;
-      case 'error':
-        throw new Error(chunk.error);
-      case 'done':
-        break;
+  let close: (() => Promise<void>) | undefined;
+  try {
+    const harness = await createHarness(loadSettings());
+    close = harness.close;
+    for (const warning of harness.warnings) {
+      process.stderr.write(`warning: ${warning}\n`);
     }
-  }
 
-  return parts.join('');
+    const controller = new AbortController();
+    process.once('SIGINT', () => controller.abort());
+
+    // Only the final turn's text is the answer. Text written before a tool
+    // call ("Let me search for that") is narration, so only a turn without
+    // tool calls reaches stdout. A retried or abandoned turn never completes,
+    // so it never reports a turn to print.
+    let printed = false;
+    await new Session(harness.agent).send(prompt, {
+      signal: controller.signal,
+      approve: (request) =>
+        options.yes
+          ? { allow: true }
+          : { allow: false, tell: declinedMessage(request.tool, 'unattended') },
+      onEvent: (event) => {
+        switch (event.type) {
+          case 'route_advanced':
+            process.stderr.write(
+              `${event.from.provider} failed; retrying on ${event.to.provider}\n`
+            );
+            break;
+          case 'assistant_turn':
+            if (!event.message.toolCalls?.length && event.message.content) {
+              process.stdout.write(event.message.content);
+              printed = true;
+            }
+            break;
+          case 'tool_start':
+            process.stderr.write(`· ${event.name}\n`);
+            break;
+        }
+      },
+    });
+    if (printed) process.stdout.write('\n');
+    return 0;
+  } catch (error) {
+    process.stderr.write(`Error: ${describeRunError(error)}\n`);
+    return 1;
+  } finally {
+    await close?.();
+    await shutdownTracing();
+  }
 }

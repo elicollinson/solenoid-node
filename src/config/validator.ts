@@ -1,12 +1,6 @@
 import { parse as parseYaml } from 'yaml';
-import { z } from 'zod';
-import {
-  EmbeddingsConfigSchema,
-  KeyboardConfigSchema,
-  McpServerSchema,
-  ModelsConfigSchema,
-  SearchConfigSchema,
-} from './schema.js';
+import type { z } from 'zod';
+import { AppSettingsSchema } from './schema.js';
 
 export interface ValidationError {
   path: string;
@@ -43,7 +37,7 @@ function validateYamlSyntax(yamlString: string): ValidationResult {
 /**
  * Create a validator from a Zod schema
  */
-function createZodValidator(schema: z.ZodSchema): SectionValidator {
+function createZodValidator(schema: z.ZodType): SectionValidator {
   return (yamlString: string): ValidationResult => {
     // First validate YAML syntax
     const syntaxResult = validateYamlSyntax(yamlString);
@@ -57,7 +51,7 @@ function createZodValidator(schema: z.ZodSchema): SectionValidator {
       return { isValid: true, errors: [], parsedValue: result.data };
     }
 
-    const errors: ValidationError[] = result.error.errors.map((e) => ({
+    const errors: ValidationError[] = result.error.issues.map((e) => ({
       path: e.path.join('.'),
       message: e.message,
     }));
@@ -66,29 +60,10 @@ function createZodValidator(schema: z.ZodSchema): SectionValidator {
   };
 }
 
-// Register known section validators
-sectionValidators.set('models', createZodValidator(ModelsConfigSchema));
-sectionValidators.set('search', createZodValidator(SearchConfigSchema));
-sectionValidators.set('embeddings', createZodValidator(EmbeddingsConfigSchema));
-
-// MCP servers validator - record of server configs
-sectionValidators.set('mcp_servers', createZodValidator(z.record(z.string(), McpServerSchema)));
-
-// Ollama host validator - URL string
-sectionValidators.set('ollama_host', createZodValidator(z.string().url()));
-
-// Ollama Cloud API key validator - string (can be empty)
-sectionValidators.set('ollama_cloud_api_key', createZodValidator(z.string()));
-
-sectionValidators.set('keyboard', createZodValidator(KeyboardConfigSchema));
-
-// Agent prompts validator - record of strings with min length
-sectionValidators.set(
-  'agent_prompts',
-  createZodValidator(
-    z.record(z.string(), z.string().min(10, 'Prompt must be at least 10 characters'))
-  )
-);
+// One validator per top-level section of the settings schema
+for (const [key, schema] of Object.entries(AppSettingsSchema.shape)) {
+  sectionValidators.set(key, createZodValidator(schema));
+}
 
 /**
  * Main entry point - uses specific validator if registered, else just YAML parse

@@ -7,7 +7,7 @@
  * component doesn't fully support stdin.write() in ink-testing-library.
  * Use the SolenoidTestHarness for integration tests of input behavior.
  */
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { ChatInput } from '../../../../src/ui/components/ChatInput.js';
@@ -89,9 +89,7 @@ describe('ChatInput', () => {
   });
 
   it('renders disabled state with gray border indication', () => {
-    const { lastFrame } = render(
-      <ChatInput onSubmit={() => {}} isDisabled={true} />
-    );
+    const { lastFrame } = render(<ChatInput onSubmit={() => {}} isDisabled={true} />);
 
     // When disabled, prompt should still be visible
     expect(lastFrame()).toContain('>');
@@ -99,9 +97,7 @@ describe('ChatInput', () => {
 
   it('does not submit when disabled', async () => {
     const onSubmit = mock(() => {});
-    const { stdin } = render(
-      <ChatInput onSubmit={onSubmit} isDisabled={true} />
-    );
+    const { stdin } = render(<ChatInput onSubmit={onSubmit} isDisabled={true} />);
 
     stdin.write('Test message');
     await new Promise((r) => setTimeout(r, 50));

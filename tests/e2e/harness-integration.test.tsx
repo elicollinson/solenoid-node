@@ -2,38 +2,39 @@
  * E2E Tests using Enhanced Test Harness
  *
  * These tests demonstrate the enhanced test harness capabilities:
- * - Real agent mode with Ollama
+ * - Real agent mode against LM Studio
  * - Custom agent injection
  * - Event tracking across all agent types
  *
- * Real agent tests are SKIPPED in CI environments where Ollama isn't available.
+ * Real agent tests are SKIPPED where LM Studio isn't serving the default
+ * model (google/gemma-4-26b-a4b) at localhost:1234, which includes CI.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import {
-  SolenoidTestHarness,
-  type AgentInterface,
   type AgentEvent,
+  type AgentInterface,
+  SolenoidTestHarness,
 } from '../../src/ui/testing/index.js';
 
 /**
- * Check if Ollama is available by attempting to connect
+ * Check that LM Studio is up and lists the default model
  */
-async function isOllamaAvailable(): Promise<boolean> {
+async function isLmStudioAvailable(): Promise<boolean> {
   try {
-    const response = await fetch('http://localhost:11434/api/tags', {
-      method: 'GET',
+    const response = await fetch('http://localhost:1234/v1/models', {
       signal: AbortSignal.timeout(5000),
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const body = (await response.json()) as { data?: Array<{ id: string }> };
+    return body.data?.some((m) => m.id === 'google/gemma-4-26b-a4b') ?? false;
   } catch {
     return false;
   }
 }
 
-// Check Ollama availability before running tests
-const ollamaAvailable = await isOllamaAvailable();
-if (!ollamaAvailable) {
-  console.log('Ollama not available - Real agent tests will be skipped');
+const lmStudioAvailable = await isLmStudioAvailable();
+if (!lmStudioAvailable) {
+  console.log('LM Studio not available - Real agent tests will be skipped');
 }
 
 describe('Enhanced Test Harness - Custom Agent Injection', () => {
@@ -166,7 +167,7 @@ describe('Enhanced Test Harness - Mock Agent Mode', () => {
   });
 });
 
-describe.skipIf(!ollamaAvailable)('Enhanced Test Harness - Real Agent Mode', () => {
+describe.skipIf(!lmStudioAvailable)('Enhanced Test Harness - Real Agent Mode', () => {
   let harness: SolenoidTestHarness | null = null;
   let initError: Error | null = null;
 
@@ -232,16 +233,16 @@ describe.skipIf(!ollamaAvailable)('Enhanced Test Harness - Real Agent Mode', () 
       return;
     }
 
-    // Clear previous messages
     await harness!.executeCommand('/clear');
     await harness!.waitForIdle();
 
-    // Just verify harness is ready and can accept input
-    // Full message processing is tested in real-agent.test.tsx
-    const state = harness!.getState();
-    expect(state.inputEnabled).toBe(true);
-    expect(state.isProcessing).toBe(false);
-  });
+    await harness!.sendMessage('What is 17 + 25? Reply with just the number.');
+
+    const frame = harness!.getCurrentFrame();
+    expect(frame.containsText('42')).toBe(true);
+    expect(frame.containsText('Error')).toBe(false);
+    expect(harness!.getState().isProcessing).toBe(false);
+  }, 180_000);
 });
 
 describe('Test Harness - getActiveAgent', () => {

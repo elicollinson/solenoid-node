@@ -7,7 +7,7 @@
  * ink-testing-library stdin doesn't reliably trigger useInput callbacks.
  * Key handling is tested through the SolenoidTestHarness integration tests.
  */
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { HelpScreen } from '../../../../src/ui/components/HelpScreen.js';
@@ -26,7 +26,7 @@ describe('HelpScreen', () => {
     expect(lastFrame()).toContain('/help');
     expect(lastFrame()).toContain('/settings');
     expect(lastFrame()).toContain('/clear');
-    expect(lastFrame()).toContain('/agents');
+    expect(lastFrame()).toContain('/tools');
     expect(lastFrame()).toContain('/quit');
   });
 
@@ -35,20 +35,15 @@ describe('HelpScreen', () => {
 
     expect(lastFrame()).toContain('Keyboard Shortcuts');
     expect(lastFrame()).toContain('Ctrl+C');
-    expect(lastFrame()).toContain('Ctrl+L');
     expect(lastFrame()).toContain('Enter');
     expect(lastFrame()).toContain('Esc');
   });
 
-  it('displays available agents section', () => {
+  it('describes the agent', () => {
     const { lastFrame } = render(<HelpScreen onClose={() => {}} />);
 
-    expect(lastFrame()).toContain('Available Agents');
-    expect(lastFrame()).toContain('research_agent');
-    expect(lastFrame()).toContain('code_executor');
-    expect(lastFrame()).toContain('chart_generator');
-    expect(lastFrame()).toContain('generic_agent');
-    expect(lastFrame()).toContain('mcp_agent');
+    expect(lastFrame()).toContain('The Agent');
+    expect(lastFrame()).toContain('MCP servers');
   });
 
   it('shows close hint', () => {
@@ -95,18 +90,8 @@ describe('HelpScreen', () => {
 
     expect(lastFrame()).toContain('Show this help screen');
     expect(lastFrame()).toContain('View current settings');
-    expect(lastFrame()).toContain('Clear message history');
-    expect(lastFrame()).toContain('List available agents');
+    expect(lastFrame()).toContain('Clear the conversation');
+    expect(lastFrame()).toContain('Show model routes');
     expect(lastFrame()).toContain('Exit the application');
-  });
-
-  it('shows agent descriptions', () => {
-    const { lastFrame } = render(<HelpScreen onClose={() => {}} />);
-
-    expect(lastFrame()).toContain('Web search and research');
-    expect(lastFrame()).toContain('Run Python code');
-    expect(lastFrame()).toContain('Create Pygal charts');
-    expect(lastFrame()).toContain('General text tasks');
-    expect(lastFrame()).toContain('External tool integrations');
   });
 });

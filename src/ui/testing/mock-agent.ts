@@ -4,7 +4,7 @@
  * Provides a controllable agent implementation for testing.
  * Simulates the async generator pattern used by the real useAgent hook.
  */
-import type { AgentEvent } from '../hooks/useAgent.js';
+import type { AgentEvent } from './types.js';
 import type { MockAgentResponse } from './types.js';
 
 /**

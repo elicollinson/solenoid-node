@@ -3,7 +3,7 @@
  *
  * Tests for the full chat interaction flow in the Solenoid terminal UI.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SolenoidTestHarness } from '../../src/ui/testing/index.js';
 
 describe('Chat Flow', () => {

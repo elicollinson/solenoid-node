@@ -8,7 +8,7 @@ import { Box, Text, useInput } from 'ink';
  *
  * Features:
  * - Mock agent mode (default): Fast, deterministic testing with configured responses
- * - Real agent mode: E2E testing with actual Ollama agent
+ * - Real agent mode: E2E testing with the real harness (LM Studio)
  * - Custom agent injection: Use any agent that implements AgentInterface
  * - Auto-generate app_settings.yaml with secrets from environment variables
  */
@@ -31,12 +31,13 @@ import type {
 } from './types.js';
 
 /**
- * Wrapper for real agent that implements AgentInterface.
- * Tracks events for testing purposes.
+ * Wrapper for the real harness that implements AgentInterface.
+ * Bridges the session's event callback into this harness's event stream,
+ * and tracks events for testing purposes. Write tools are auto-approved.
  */
 class RealAgentWrapper implements AgentInterface {
-  private runner: import('@google/adk').InMemoryRunner | null = null;
-  private sessionId: string = crypto.randomUUID();
+  private session: import('../../harness/index.js').Session | null = null;
+  private closeHarness: (() => Promise<void>) | null = null;
   private eventHistory: AgentEvent[] = [];
   private initPromise: Promise<void> | null = null;
   private initError: Error | null = null;
@@ -54,9 +55,12 @@ class RealAgentWrapper implements AgentInterface {
       const initPromise = (async () => {
         try {
           // Dynamic import to avoid loading agent code when not needed
-          const { createAdkAgentHierarchy } = await import('../../agents/index.js');
-          const hierarchy = await createAdkAgentHierarchy();
-          this.runner = hierarchy.runner;
+          const { AppSettingsSchema, tryLoadSettings } = await import('../../config/index.js');
+          const { Session, createHarness } = await import('../../harness/index.js');
+          // Without a settings file, the defaults: Gemma on LM Studio at localhost.
+          const harness = await createHarness(tryLoadSettings() ?? AppSettingsSchema.parse({}));
+          this.session = new Session(harness.agent);
+          this.closeHarness = harness.close;
         } catch (error) {
           this.initError = error instanceof Error ? error : new Error(String(error));
           throw this.initError;
@@ -70,71 +74,66 @@ class RealAgentWrapper implements AgentInterface {
   }
 
   async *run(input: string): AsyncGenerator<AgentEvent, void, unknown> {
-    if (!this.runner) {
+    const session = this.session;
+    if (!session) {
       throw new Error('Real agent not initialized. Call initialize() first.');
     }
 
-    try {
-      // Dynamic import for runAgent
-      const { runAgent } = await import('../../agents/index.js');
+    const queue: AgentEvent[] = [];
+    let wake: (() => void) | null = null;
+    let finished = false;
+    const push = (event: AgentEvent) => {
+      this.eventHistory.push(event);
+      queue.push(event);
+      wake?.();
+    };
 
-      for await (const chunk of runAgent(input, this.runner, this.sessionId)) {
-        switch (chunk.type) {
-          case 'text':
-            if (chunk.content) {
-              const event: AgentEvent = { type: 'text', content: chunk.content };
-              this.eventHistory.push(event);
-              yield event;
-            }
-            break;
-          case 'tool_call':
-            if (chunk.toolCall) {
-              const toolCallId = crypto.randomUUID();
-              const startEvent: AgentEvent = {
-                type: 'tool_start',
-                toolCallId,
-                toolName: chunk.toolCall.function.name,
-              };
-              this.eventHistory.push(startEvent);
-              yield startEvent;
-
-              if (chunk.toolCall.function.arguments) {
-                const argsEvent: AgentEvent = {
-                  type: 'tool_args',
-                  toolCallId,
-                  toolArgs: JSON.stringify(chunk.toolCall.function.arguments),
-                };
-                this.eventHistory.push(argsEvent);
-                yield argsEvent;
-              }
-
-              const endEvent: AgentEvent = { type: 'tool_end', toolCallId };
-              this.eventHistory.push(endEvent);
-              yield endEvent;
-            }
-            break;
-          case 'transfer':
-            if (chunk.transferTo) {
-              const event: AgentEvent = { type: 'transfer', transferTo: chunk.transferTo };
-              this.eventHistory.push(event);
-              yield event;
-            }
-            break;
-          case 'done': {
-            const doneEvent: AgentEvent = { type: 'done' };
-            this.eventHistory.push(doneEvent);
-            yield doneEvent;
-            break;
+    session
+      .send(input, {
+        approve: () => ({ allow: true }),
+        onEvent: (event) => {
+          switch (event.type) {
+            case 'text_delta':
+              push({ type: 'text', content: event.text });
+              break;
+            case 'tool_start':
+              push({ type: 'tool_start', toolCallId: event.id, toolName: event.name });
+              push({
+                type: 'tool_args',
+                toolCallId: event.id,
+                toolArgs: JSON.stringify(event.args),
+              });
+              break;
+            case 'tool_end':
+              push({ type: 'tool_end', toolCallId: event.id });
+              break;
+            case 'route_advanced':
+              push({ type: 'status', content: `Switching to ${event.to.provider}` });
+              break;
           }
-        }
+        },
+      })
+      .then(
+        () => push({ type: 'done' }),
+        (error) =>
+          push({ type: 'error', error: error instanceof Error ? error.message : String(error) })
+      )
+      .finally(() => {
+        finished = true;
+        wake?.();
+      });
+
+    while (true) {
+      const next = queue.shift();
+      if (next) {
+        yield next;
+        continue;
       }
-    } catch (error) {
-      const errorEvent: AgentEvent = {
-        type: 'error',
-        error: error instanceof Error ? error.message : String(error),
-      };
-      this.eventHistory.push(errorEvent);
-      yield errorEvent;
+      if (finished) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = null;
     }
   }
 
@@ -144,11 +143,15 @@ class RealAgentWrapper implements AgentInterface {
 
   reset(): void {
     this.eventHistory = [];
-    this.sessionId = crypto.randomUUID();
+    this.session?.clear();
   }
 
   getInitError(): Error | null {
     return this.initError;
+  }
+
+  async close(): Promise<void> {
+    await this.closeHarness?.();
   }
 }
 
@@ -188,7 +191,7 @@ class RealAgentWrapper implements AgentInterface {
  *   timeout: 120000,
  * });
  *
- * await harness.start(); // Will initialize real Ollama agent
+ * await harness.start(); // Will initialize the real harness (LM Studio)
  * const result = await harness.sendMessage('What is 2+2?');
  *
  * expect(harness.getCurrentFrame().containsText('4')).toBe(true);
@@ -520,6 +523,7 @@ export class SolenoidTestHarness {
     this.mockAgent.reset();
     if (this.realAgent) {
       this.realAgent.reset();
+      void this.realAgent.close();
     }
     if (this.activeAgent.reset) {
       this.activeAgent.reset();

@@ -10,18 +10,21 @@
  * - commander: Declarative CLI argument parsing and command definitions
  */
 import { program } from 'commander';
+import { version } from '../package.json';
 import { runNonInteractive } from './cli-runner.js';
 import { ensureSettingsFile } from './config/index.js';
 
 program
   .name('solenoid')
-  .description('Multi-agent AI assistant with local LLM inference')
-  .version('2.0.0-alpha.1')
+  .description('Single-agent AI harness for LM Studio and OpenRouter models')
+  .version(version)
   .option('-r, --run <prompt>', 'Run a prompt non-interactively and print the output to stdout')
+  .option('-y, --yes', 'With --run: allow tools that change things without asking')
   .action(async (options) => {
     if (options.run) {
       // Non-interactive mode
-      const exitCode = await runNonInteractive(options.run);
+      ensureSettingsFile();
+      const exitCode = await runNonInteractive(options.run, { yes: Boolean(options.yes) });
       process.exit(exitCode);
     } else {
       // Interactive UI mode

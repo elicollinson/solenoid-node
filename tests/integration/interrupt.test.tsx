@@ -3,7 +3,7 @@
  *
  * Tests for the agent interrupt/pause feature using the test harness.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { SolenoidTestHarness } from '../../src/ui/testing/index.js';
 
 describe('Agent Interrupt', () => {

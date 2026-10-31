@@ -2,14 +2,15 @@
  * Weights & Biases Weave Tracing via OpenTelemetry
  *
  * Opt-in tracing: enabled only when WANDB_API_KEY and WANDB_PROJECT_ID are set.
- * Uses ADK's maybeSetOtelProviders() to wire a BatchSpanProcessor + OTLP
- * protobuf exporter targeting Weave's trace endpoint. ADK automatically
- * instruments agent invocations, tool calls, LLM requests, and agent transfers.
+ * Registers a global tracer provider with a BatchSpanProcessor + OTLP protobuf
+ * exporter targeting Weave's trace endpoint. The core (src/core/tracing.ts)
+ * emits OpenInference spans for every agent run, model call, tool call and
+ * injection screen; without a registered provider those spans are no-ops.
  */
-import { maybeSetOtelProviders } from '@google/adk';
-import type { Context } from '@opentelemetry/api';
+import { type Context, context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { BasicTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { uiLogger } from '../utils/logger.js';
 
@@ -49,7 +50,7 @@ class WeaveSpanProcessor implements SpanProcessor {
   }
 }
 
-let processor: WeaveSpanProcessor | null = null;
+let provider: BasicTracerProvider | null = null;
 
 export function initTracing(): void {
   const apiKey = process.env.WANDB_API_KEY;
@@ -72,20 +73,22 @@ export function initTracing(): void {
     },
   });
 
-  processor = new WeaveSpanProcessor(new BatchSpanProcessor(exporter));
-
-  // ADK's maybeSetOtelProviders registers a global NodeTracerProvider
-  // with the given span processors. ADK's tracer proxy resolves it lazily.
-  maybeSetOtelProviders([{ spanProcessors: [processor] }]);
+  provider = new BasicTracerProvider({
+    spanProcessors: [new WeaveSpanProcessor(new BatchSpanProcessor(exporter))],
+  });
+  // Spans nest through the active context, which needs async-hooks
+  // propagation to survive awaits.
+  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+  trace.setGlobalTracerProvider(provider);
 
   uiLogger.info({ projectId, url }, 'Weave tracing enabled');
 }
 
 export async function shutdownTracing(): Promise<void> {
-  if (!processor) return;
+  if (!provider) return;
   try {
-    await processor.forceFlush();
-    await processor.shutdown();
+    await provider.forceFlush();
+    await provider.shutdown();
   } catch (error) {
     uiLogger.warn({ error: String(error) }, 'Error shutting down tracing');
   }

@@ -1,11 +1,9 @@
 /**
- * Main Application Entry Point
+ * Package Entry Point
  *
- * Simplified startup script that launches the terminal UI with integrated
- * agent system. Used when the application is run directly.
+ * The harness as a library: the agent core, the settings-driven harness and
+ * its configuration. The terminal app is started by ./cli.ts.
  */
-console.log('Solenoid v2.0.0-alpha.1');
-
-await import('./ui/index.js');
-
-export {};
+export * from './core/index.js';
+export * from './harness/index.js';
+export * from './config/index.js';

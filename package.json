@@ -1,7 +1,7 @@
 {
   "name": "solenoid-node",
   "version": "1.0.1",
-  "description": "Multi-agent AI assistant with local LLM inference",
+  "description": "Single-agent AI harness for LM Studio and OpenRouter models",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -27,7 +27,8 @@
     "ai",
     "agent",
     "llm",
-    "ollama",
+    "lm-studio",
+    "openrouter",
     "cli",
     "terminal",
     "bun"
@@ -39,27 +40,24 @@
     "url": "https://github.com/elicollinson/solenoid-node"
   },
   "dependencies": {
-    "@ag-ui/core": "^0.0.43",
-    "@anthropic-ai/sdk": "^0.39.0",
-    "@google/adk": "0.3.0",
-    "@google/genai": "^0.14.0",
-    "@hono/zod-validator": "^0.4.3",
+    "@arizeai/openinference-semantic-conventions": "^2",
+    "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#7914c4270eeb25b47c2313eb327500a3b8c8edc6",
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/context-async-hooks": "^2",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.210.0",
-    "@opentelemetry/sdk-trace-base": "^2.1.0",
+    "@opentelemetry/sdk-trace-base": "^2",
     "@pppp606/ink-chart": "^0.2.5",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "hono": "^4.7.6",
     "ink": "^6.0.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
-    "ollama": "^0.5.14",
+    "openai": "^6",
     "react": "^19.0.0",
     "yaml": "^2.7.1",
-    "zod": "^3.24.2"
+    "zod": "^4"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -70,9 +68,6 @@
     "react-devtools-core": "^6.1.1",
     "standard-version": "^9.5.0",
     "typescript": "^5.7.3"
-  },
-  "overrides": {
-    "zod": "$zod"
   },
   "trustedDependencies": [
     "@biomejs/biome"

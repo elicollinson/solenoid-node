@@ -3,9 +3,10 @@
  *
  * Unit tests for the Header component that displays the app title and version.
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
+import { version } from '../../../../package.json';
 import { Header } from '../../../../src/ui/components/Header.js';
 
 describe('Header', () => {
@@ -13,7 +14,7 @@ describe('Header', () => {
     const { lastFrame } = render(<Header />);
 
     expect(lastFrame()).toContain('Solenoid');
-    expect(lastFrame()).toContain('v2.0.0-alpha');
+    expect(lastFrame()).toContain(`v${version}`);
   });
 
   it('renders with custom title', () => {
@@ -27,13 +28,11 @@ describe('Header', () => {
     const { lastFrame } = render(<Header version="1.0.0" />);
 
     expect(lastFrame()).toContain('v1.0.0');
-    expect(lastFrame()).not.toContain('v2.0.0-alpha');
+    expect(lastFrame()).not.toContain(`v${version}`);
   });
 
   it('renders with both custom title and version', () => {
-    const { lastFrame } = render(
-      <Header title="My App" version="3.0.0-beta" />
-    );
+    const { lastFrame } = render(<Header title="My App" version="3.0.0-beta" />);
 
     expect(lastFrame()).toContain('My App');
     expect(lastFrame()).toContain('v3.0.0-beta');

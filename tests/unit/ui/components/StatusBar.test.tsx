@@ -3,7 +3,7 @@
  *
  * Unit tests for the StatusBar component that shows status and exit hint.
  */
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { StatusBar } from '../../../../src/ui/components/StatusBar.js';
@@ -35,18 +35,14 @@ describe('StatusBar', () => {
   });
 
   it('renders loading state with spinner label', () => {
-    const { lastFrame } = render(
-      <StatusBar isLoading={true} status="Thinking..." />
-    );
+    const { lastFrame } = render(<StatusBar isLoading={true} status="Thinking..." />);
 
     // When loading, the status is shown as a spinner label
     expect(lastFrame()).toContain('Thinking...');
   });
 
   it('renders non-loading state without spinner', () => {
-    const { lastFrame } = render(
-      <StatusBar isLoading={false} status="Ready" />
-    );
+    const { lastFrame } = render(<StatusBar isLoading={false} status="Ready" />);
 
     expect(lastFrame()).toContain('Ready');
     expect(lastFrame()).toContain('Ctrl+C to quit');
@@ -77,9 +73,7 @@ describe('StatusBar', () => {
   });
 
   it('does not show interrupt hint when interruptHint is undefined', () => {
-    const { lastFrame } = render(
-      <StatusBar isLoading={true} status="Thinking..." />
-    );
+    const { lastFrame } = render(<StatusBar isLoading={true} status="Thinking..." />);
 
     expect(lastFrame()).not.toContain('to interrupt');
   });
