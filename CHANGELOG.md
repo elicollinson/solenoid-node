@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.0.5](https://github.com/elicollinson/solenoid-node/compare/v1.0.4...v1.0.5) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace wall-clock deadlines with a provider stall guard
+* the parent orchestrates subagents and never blocks on them
+
+### Features
+
+* message subagents, and start a parent turn when one finishes ([46e2641](https://github.com/elicollinson/solenoid-node/commit/46e264146dfc44e1db16505b2e46d965bf0b620b))
+* replace wall-clock deadlines with a provider stall guard ([d189cc4](https://github.com/elicollinson/solenoid-node/commit/d189cc49966b7c54226f4862a43d39f052eeb76f))
+* subagents for the session you talk to ([2a4bfd8](https://github.com/elicollinson/solenoid-node/commit/2a4bfd8fa61ab8afc36e9eed6b4795c82a443a98))
+* the parent orchestrates subagents and never blocks on them ([a087441](https://github.com/elicollinson/solenoid-node/commit/a08744144d9ee62f6ef47e217c69df0dc0ca47fa))
+
+
+### Bug Fixes
+
+* lint error in the stall guard; add a verify script that runs what CI runs ([42195a7](https://github.com/elicollinson/solenoid-node/commit/42195a78e159cbfad84da11d43e627108491708c))
+
 ### [1.0.4](https://github.com/elicollinson/solenoid-node/compare/v1.0.3...v1.0.4) (2026-10-31)
 
 
