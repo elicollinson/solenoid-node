@@ -63,8 +63,12 @@ export function stallGuardedFetch(limits: StallLimits, inner: typeof fetch = fet
             return;
           }
           if (value.byteLength) {
-            if (phase === 'idle') timer?.refresh();
-            else arm((phase = 'idle'));
+            if (phase === 'idle') {
+              timer?.refresh();
+            } else {
+              phase = 'idle';
+              arm(phase);
+            }
           }
           stream.enqueue(value);
         } catch (error) {
