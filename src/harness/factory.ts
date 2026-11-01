@@ -1,9 +1,10 @@
 /**
  * Harness Factory
  *
- * Builds the one agent from settings: the route chain (LM Studio and
- * OpenRouter clients), the injection screen (solenoid-security's Gemma
- * judge), and the tool set (built-ins plus every connected MCP server).
+ * Builds what every agent shares from settings: the route chain (LM Studio
+ * and OpenRouter clients), the injection screen (solenoid-security's Gemma
+ * judge) and the base tool set (built-ins plus every connected MCP server).
+ * Each session's agent is built from a profile (./profile.ts) on top of them.
  */
 import {
   OpenAICompatibleJudge,
@@ -22,7 +23,6 @@ import {
 import {
   Agent,
   type AgentTool,
-  type ApprovalHandler,
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
@@ -33,6 +33,7 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
+import { type AgentProfile, profileTools } from './profile.js';
 import {
   DEFAULT_SYSTEM_PROMPT,
   SUBAGENT_GUIDE,
@@ -41,7 +42,7 @@ import {
   withToday,
 } from './prompt.js';
 import { Session, declineUnattended } from './session.js';
-import { SubagentManager, subagentToolNames } from './subagents.js';
+import { SubagentManager } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
 const LMSTUDIO_PLACEHOLDER_KEY = 'lm-studio';
@@ -153,17 +154,15 @@ export interface Harness {
   settings: AppSettings;
   /** The routes the agent tries, in order: `settings.routes` less any that were skipped. */
   routes: RouteRef[];
-  /** Names of the tools a session that can spawn holds, built-ins first. */
-  toolNames: string[];
   /** Problems that did not stop startup: skipped routes, MCP servers that failed to connect. */
   warnings: string[];
   /**
-   * A new conversation. With `canSpawn`, its agent also holds the subagent
+   * A new conversation with an agent of `profile`; the default profile is
+   * the CLI's agent. With `canSpawn`, the agent also holds the subagent
    * tools and can start child sessions, which never can themselves; each
    * child that finishes starts a turn with its result (Session.onAutoTurn).
-   * `approve` replaces the approval interrupts (see SessionOptions).
    */
-  createSession(options?: { canSpawn?: boolean; approve?: ApprovalHandler }): Session;
+  createSession(profile?: AgentProfile): Session;
   close(): Promise<void>;
 }
 
@@ -203,47 +202,43 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
 
   // Every open session, so closing the harness closes them and their subagents.
   const sessions = new Set<Session>();
-  const track = (session: Session) => {
-    sessions.add(session);
-    return session;
-  };
-  const plainAgent = makeAgent('solenoid', tools, systemPrompt);
-
-  const createSession: Harness['createSession'] = ({ canSpawn = false, approve } = {}) => {
-    if (!canSpawn) return track(new Session(plainAgent, { approve }));
-    const manager = new SubagentManager({
-      tools,
-      // Nobody can approve a child's writes: it is told each was declined, and says so.
-      createSession: (name, childTools) =>
-        new Session(
-          makeAgent(`solenoid/${name}`, childTools, `${systemPrompt}\n\n${SUBAGENT_ROLE}`),
-          { approve: declineUnattended }
-        ),
-      summarize,
-    });
-    const agent = makeAgent(
-      'solenoid',
-      [...tools, ...manager.tools()],
-      `${systemPrompt}\n\n${SUBAGENT_GUIDE}`
-    );
+  const createSession: Harness['createSession'] = (profile = {}) => {
+    const name = profile.name ?? 'solenoid';
+    const agentTools = profileTools(tools, profile);
+    const prompt = profile.systemPrompt ?? systemPrompt;
+    const manager = profile.canSpawn
+      ? new SubagentManager({
+          tools: agentTools,
+          // Nobody can approve a child's writes: it is told each was declined, and says so.
+          createSession: (childName, childTools) =>
+            new Session(
+              makeAgent(`${name}/${childName}`, childTools, `${prompt}\n\n${SUBAGENT_ROLE}`),
+              { approve: declineUnattended }
+            ),
+          summarize,
+        })
+      : undefined;
+    const agent = manager
+      ? makeAgent(name, [...agentTools, ...manager.tools()], `${prompt}\n\n${SUBAGENT_GUIDE}`)
+      : makeAgent(name, agentTools, prompt);
     const session: Session = new Session(agent, {
-      approve,
+      approve: profile.approve,
       background: manager,
       onClose: () => {
-        manager.close();
+        manager?.close();
         sessions.delete(session);
       },
     });
-    return track(session);
+    sessions.add(session);
+    return session;
   };
-  const toolNames = [...tools.map((t) => t.definition.function.name), ...subagentToolNames()];
   const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));
   agentLogger.info(
     {
       settingsPath: getSettingsPath(),
       routes: routeRefs,
       screening: settings.screening.enabled,
-      tools: toolNames,
+      baseTools: tools.map((t) => t.definition.function.name),
     },
     'Harness ready'
   );
@@ -251,7 +246,6 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   return {
     settings,
     routes: routeRefs,
-    toolNames,
     warnings: [
       ...skipped,
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),

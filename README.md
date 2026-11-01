@@ -103,6 +103,33 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
 
+### Agent profiles
+
+The CLI's agent is the default profile. An app built on the harness declares its own agents in code: the base tools (built-ins plus every connected MCP server) less any it excludes, plus tools of its own, which it builds bound to its own data and passes in.
+
+```ts
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  createHarness,
+  declineUnattended,
+  defineProfile,
+} from 'solenoid-node';
+
+const calendarTriage = (db: Db) =>
+  defineProfile({
+    name: 'calendar-triage',
+    systemPrompt: `${DEFAULT_SYSTEM_PROMPT}\n\nYou keep the person's calendar tidy.`,
+    tools: calendarTools(db), // the app's own AgentTools
+    exclude: ['render_chart'],
+    approve: declineUnattended, // or the app's own approval policy
+  });
+
+const harness = await createHarness(loadSettings());
+const session = harness.createSession(calendarTriage(db));
+```
+
+Each session gets its own agent, so one profile's tools never reach another's sessions. Excluding a tool the base set lacks, or adding one it keeps, fails when the session opens; to replace a base tool, exclude it and add your own. `defineProfile` registers the prompt as authored text, which the injection screen subtracts, so use it only for a prompt written in the app's code, never one with data interpolated into it. A profile not declared that way still works and its prompt is screened. `session.toolNames` lists what a session holds. With `canSpawn`, its subagents get the profile's tools and prompt.
+
 ### Subagents
 
 `harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:

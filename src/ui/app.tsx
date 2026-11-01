@@ -164,7 +164,7 @@ function AppContent() {
         addSystemMessage(
           `Routes (tried in order):\n${routes}\n\nScreening: ${
             screening.enabled ? `${screening.provider}: ${screening.model}` : 'off'
-          }\n\nTools:\n${harness.toolNames.map((n) => `  - ${n}`).join('\n')}`
+          }\n\nTools:\n${session.toolNames.map((n) => `  - ${n}`).join('\n')}`
         );
         return;
       }

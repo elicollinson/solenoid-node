@@ -134,6 +134,11 @@ export class Session {
     options.background?.onNews(() => this.notify());
   }
 
+  /** Names of the tools this session's agent holds, in the order it is offered them. */
+  get toolNames(): string[] {
+    return this.agent.toolDefinitions.map((tool) => tool.function.name);
+  }
+
   /** Release what the session holds. Once only. */
   close(): void {
     if (this.closed) return;
