@@ -16,6 +16,7 @@ import type { TextOrigin } from '@elicollinson/solenoid-security';
  * repos can converge on one core later.
  */
 import type OpenAI from 'openai';
+import { ProviderStalledError } from './errors.js';
 import { abortReason } from './signals.js';
 import type { FunctionToolDefinition } from './tools.js';
 import { tracedChat } from './tracing.js';
@@ -142,7 +143,11 @@ export class OpenAICompatibleProvider implements ChatProvider {
   ) {}
 
   chat(messages: ChatMessage[], opts: ChatOptions): Promise<ChatMessage> {
-    return tracedChat(this.providerName, messages, opts, () => this.chatInner(messages, opts));
+    return tracedChat(this.providerName, messages, opts, () =>
+      this.chatInner(messages, opts).catch((error: unknown) => {
+        throw stallOf(error) ?? error;
+      })
+    );
   }
 
   private async chatInner(messages: ChatMessage[], opts: ChatOptions): Promise<ChatMessage> {
@@ -297,8 +302,17 @@ function mergeReasoningDetails(details: unknown[]): unknown[] {
   return merged;
 }
 
+/** The stall behind `error`: the SDK reports one before the response as a connection error. */
+function stallOf(error: unknown): ProviderStalledError | undefined {
+  if (error instanceof ProviderStalledError) return error;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  return cause instanceof ProviderStalledError ? cause : undefined;
+}
+
 /** Whether a failed provider call is worth retrying: rate limits, 5xx, dropped connections. */
 export function isTransientProviderError(error: unknown): boolean {
+  // A server that went quiet once will likely do so again; the next route is the better bet.
+  if (stallOf(error)) return false;
   const candidate = error as {
     status?: number;
     statusCode?: number;

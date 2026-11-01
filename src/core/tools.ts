@@ -81,7 +81,13 @@ const DONE = z
   );
 
 export interface ToolContext {
-  signal?: AbortSignal;
+  /** The run's signal: stop when it fires. */
+  signal: AbortSignal;
+  /**
+   * Say this call did something a replay would repeat. A committed attempt
+   * is never re-run on another route; writes commit on their own.
+   */
+  commit(): void;
 }
 
 export interface AgentTool<S extends z.ZodType = z.ZodType> {

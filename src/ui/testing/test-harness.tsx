@@ -21,7 +21,6 @@ import { clearSettingsCache } from '../../config/settings.js';
 // Not harness/index.js, which would load the whole harness (MCP, providers,
 // screening) into every mock-agent test.
 import { CUSTOM_EVENTS, customValue } from '../../harness/ag-ui/encoder.js';
-import { approvalAnswer } from '../../harness/session.js';
 import { MockAgent } from './mock-agent.js';
 import type {
   AgentEvent,
@@ -61,10 +60,11 @@ class RealAgentWrapper implements AgentInterface {
         try {
           // Dynamic import to avoid loading agent code when not needed
           const { AppSettingsSchema, tryLoadSettings } = await import('../../config/index.js');
-          const { Session, createHarness } = await import('../../harness/index.js');
+          const { createHarness } = await import('../../harness/index.js');
           // Without a settings file, the defaults: Gemma on LM Studio at localhost.
           const harness = await createHarness(tryLoadSettings() ?? AppSettingsSchema.parse({}));
-          this.session = new Session(harness.agent);
+          // Tests run unattended with every write allowed.
+          this.session = harness.createSession({ approve: () => ({ allow: true }) });
           this.closeHarness = harness.close;
         } catch (error) {
           this.initError = error instanceof Error ? error : new Error(String(error));
@@ -118,12 +118,6 @@ class RealAgentWrapper implements AgentInterface {
               if (route) push({ type: 'status', content: `Switching to ${route.to.provider}` });
               break;
             }
-            case EventType.RUN_FINISHED:
-              // Tests run unattended with every write allowed.
-              if (event.outcome?.type === 'interrupt') {
-                session.resume(event.outcome.interrupts.map((i) => approvalAnswer(i.id, 'allow')));
-              }
-              break;
           }
         },
       })

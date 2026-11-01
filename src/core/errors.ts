@@ -6,12 +6,23 @@
  */
 import type { ScreeningBoundary as SecurityScreeningBoundary } from '@elicollinson/solenoid-security';
 
-export class AgentTimeoutError extends Error {
-  readonly code = 'AGENT_TIMEOUT';
+/**
+ * The model server went quiet: no first byte, or no further chunk, within the
+ * provider's stall limit (see ./stall.ts). Not retried on the same route.
+ */
+export class ProviderStalledError extends Error {
+  readonly code = 'PROVIDER_STALLED';
 
-  constructor(readonly timeoutMs: number) {
-    super(`Agent run timed out after ${timeoutMs}ms`);
-    this.name = 'AgentTimeoutError';
+  constructor(
+    readonly phase: 'first_byte' | 'idle',
+    readonly waitedMs: number
+  ) {
+    super(
+      phase === 'first_byte'
+        ? `Model server sent nothing for ${Math.round(waitedMs / 1000)}s`
+        : `Model server stopped streaming for ${Math.round(waitedMs / 1000)}s`
+    );
+    this.name = 'ProviderStalledError';
   }
 }
 

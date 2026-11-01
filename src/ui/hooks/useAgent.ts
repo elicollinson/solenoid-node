@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { loadSettings } from '../../config/index.js';
-import { type Harness, Session, createHarness } from '../../harness/index.js';
+import { type Harness, type Session, createHarness } from '../../harness/index.js';
 
 /**
  * Resource wrapper for Suspense compatibility.
@@ -59,6 +59,6 @@ export function currentHarness(): Harness | undefined {
 export function useAgent(): { harness: Harness; session: Session } {
   // Suspends until the harness is ready
   const harness = getHarnessResource().read();
-  const [session] = useState(() => new Session(harness.agent));
+  const [session] = useState(() => harness.createSession({ canSpawn: true }));
   return { harness, session };
 }

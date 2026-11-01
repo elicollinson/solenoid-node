@@ -7,9 +7,9 @@
 import { ScreeningError } from '@elicollinson/solenoid-security';
 import {
   AgentAbortedError,
-  AgentTimeoutError,
   PromptInjectionDetectedError,
   PromptInjectionScreeningError,
+  ProviderStalledError,
 } from '../core/index.js';
 
 /**
@@ -54,8 +54,8 @@ export function describeRunError(error: unknown): string {
           : 'the judge could not be reached';
     return `Stopped: injection screening failed (${detail}). Check the screening model in /settings, or set screening.enabled: false.`;
   }
-  if (error instanceof AgentTimeoutError) {
-    return `Timed out after ${Math.round(error.timeoutMs / 1000)}s on every route.`;
+  if (error instanceof ProviderStalledError) {
+    return `${error.message}, on every route. If the model is only slow, raise providers.<name>.stall in /settings.`;
   }
   const message = error instanceof Error ? error.message : String(error);
   if (message === 'terminated') {

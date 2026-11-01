@@ -4,8 +4,9 @@
  * A framework-free agent loop: call the model, run the tools it asks for,
  * feed the results back, repeat until it answers. Around that loop:
  *
- * - Model routes: an ordered fallback chain. Each route gets a fresh deadline
- *   and replays the task from its original input.
+ * - Model routes: an ordered fallback chain. A failed attempt (a provider
+ *   error, or a stalled server: see ./stall.ts) replays the task from its
+ *   original input on the next route.
  * - Transient provider errors back off and retry; truncated or empty turns
  *   are continued; a refusal fails the attempt.
  * - Optional structured output: a zod schema becomes a `submit_result` tool,
@@ -33,7 +34,6 @@ import { z } from 'zod';
 import {
   AgentAbortedError,
   AgentRunError,
-  AgentTimeoutError,
   PromptInjectionDetectedError,
   PromptInjectionScreeningError,
   type ScreeningBoundary,
@@ -51,6 +51,7 @@ import {
 import type { Reviewer } from './reviewer.js';
 import { abortReason, awaitWithSignal, waitFor } from './signals.js';
 import { extractJson, validateStructured } from './structured.js';
+import { truncate } from './text.js';
 import {
   type AgentTool,
   type ApprovalHandler,
@@ -66,11 +67,10 @@ import {
   withSpanKind,
 } from './tracing.js';
 
-export const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60_000;
 /**
  * Model calls per attempt. The last one is offered no tools, so a model that
  * keeps calling them (redrawing a chart it cannot see, say) has to answer
- * with what it has instead of running until the deadline.
+ * with what it has instead of looping until someone interrupts it.
  */
 export const DEFAULT_MAX_TURNS = 25;
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
@@ -102,8 +102,6 @@ export interface AgentOptions {
   tools?: AgentTool[];
   reviewers?: Reviewer[];
   think?: ThinkLevel;
-  /** Per-attempt deadline, including model continuations and tool calls. */
-  timeoutMs?: number;
   /** Model calls per attempt; the last is offered no tools. */
   maxTurns?: number;
   /** Name shown on the AGENT root span. */
@@ -165,7 +163,6 @@ export class Agent {
   private readonly tools = new Map<string, AgentTool>();
   private readonly reviewers = new Map<string, Reviewer>();
   private readonly think: ThinkLevel;
-  private readonly timeoutMs: number;
   private readonly maxTurns: number;
   private readonly name: string;
   private readonly screener?: Screener;
@@ -180,13 +177,9 @@ export class Agent {
     this.routes = opts.routes;
     this.systemPrompt = opts.systemPrompt;
     this.think = opts.think ?? true;
-    this.timeoutMs = opts.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.maxTurns = opts.maxTurns ?? DEFAULT_MAX_TURNS;
     if (!Number.isInteger(this.maxTurns) || this.maxTurns < 1) {
       throw new Error('maxTurns must be a positive integer');
-    }
-    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
-      throw new Error('timeoutMs must be a positive finite number');
     }
     this.name = opts.name ?? this.constructor.name;
     this.screener = opts.screen;
@@ -274,7 +267,7 @@ export class Agent {
         this.log.warn({ error: String(error) }, '[agent] event listener threw');
       }
     };
-    const external = options.signal ?? new AbortController().signal;
+    const signal = options.signal ?? new AbortController().signal;
 
     return withSpanKind(
       'AGENT',
@@ -282,7 +275,6 @@ export class Agent {
       () => ({
         [SemanticConventions.INPUT_VALUE]: safeMessagesJson(messages),
         [SemanticConventions.INPUT_MIME_TYPE]: 'application/json',
-        'agent.timeout_ms': this.timeoutMs,
         'agent.route_count': this.routes.length,
         ...Object.fromEntries(
           this.routes.flatMap((route, index) => [
@@ -295,12 +287,6 @@ export class Agent {
         await this.screenInputs(messages, emit);
         for (let index = 0; index < this.routes.length; index++) {
           const route = this.routes[index]!;
-          const controller = new AbortController();
-          const timer = setTimeout(
-            () => controller.abort(new AgentTimeoutError(this.timeoutMs)),
-            this.timeoutMs
-          );
-          const signal = AbortSignal.any([external, controller.signal]);
           const attempt: Attempt = {
             client: route.client,
             model: route.model,
@@ -324,11 +310,9 @@ export class Agent {
             return { output, messages: working, routeIndex: index };
           } catch (rawError) {
             const error =
-              external.aborted && !(rawError instanceof AgentAbortedError)
+              signal.aborted && !(rawError instanceof AgentAbortedError)
                 ? new AgentAbortedError()
-                : signal.aborted && signal.reason instanceof Error && !isScreeningFailure(rawError)
-                  ? signal.reason
-                  : rawError;
+                : rawError;
             const next = this.routes[index + 1];
             // Interrupts, injection verdicts and committed writes all end the
             // run here: replaying would ignore the person, retry an attack, or
@@ -354,8 +338,6 @@ export class Agent {
             });
             this.log.warn({ from, to, error: message }, '[route] attempt failed; advancing route');
             emit({ type: 'route_advanced', from, to, error: message });
-          } finally {
-            clearTimeout(timer);
           }
         }
         throw new AgentRunError('Model route chain was unexpectedly empty');
@@ -442,7 +424,7 @@ export class Agent {
         if (signal.aborted) throw abortReason(signal);
         // Bounded, unlike the Assistant's loop: a person is watching, and an
         // LM Studio that is simply off should hand over to the next route in
-        // seconds, not at the end of the attempt deadline.
+        // seconds, not after a run of retries.
         if (!isTransientProviderError(error) || retries >= MAX_TRANSIENT_RETRIES) throw error;
         retries++;
         const message = error instanceof Error ? error.message : String(error);
@@ -559,7 +541,7 @@ export class Agent {
           screened: true,
         });
         // A local server can return an immediate empty response. Pace those
-        // continuations so the deadline cannot turn into a hot loop.
+        // continuations so they cannot turn into a hot loop.
         if (!content && !msg.thinking) await waitFor(100, signal);
         continue;
       }
@@ -709,6 +691,9 @@ export class Agent {
             Promise.resolve(
               tool.execute(tool.kind === 'display' ? withoutDone(args) : args, {
                 signal: attempt.signal,
+                commit: () => {
+                  attempt.committed = true;
+                },
               })
             ),
             attempt.signal
@@ -865,10 +850,6 @@ function argumentError(rawArgs: unknown, error: z.ZodError): string {
     return `the arguments were not valid JSON, so the call was not made. Send one JSON object. Received: ${truncate(rawArgs, MAX_ECHOED_ARGS_CHARS)}`;
   }
   return `invalid arguments, so the call was not made.\n${z.prettifyError(error)}\nYou sent: ${truncate(safeJson(rawArgs), MAX_ECHOED_ARGS_CHARS)}`;
-}
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /** A display call's arguments as its tool defined them, without the loop's `done`. */

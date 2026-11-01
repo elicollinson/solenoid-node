@@ -13,12 +13,18 @@
  * Each user message is sent as operator text. A write that needs approval
  * ends the AG-UI run with an interrupt; `resume` answers it, and the turn
  * carries on in a new run.
+ *
+ * Turns run one at a time: a send while one is running waits its turn. A
+ * session with background work (its subagents) also starts turns itself,
+ * when that work has news: see `onAutoTurn`. While the work runs, the
+ * model's copy of each opening message ends with its status.
  */
 import type { AGUIEvent, Interrupt, Message, ResumeEntry } from '@ag-ui/core';
 import type { ToolVerdict } from '@elicollinson/solenoid-security';
 import {
   type Agent,
   AgentAbortedError,
+  type ApprovalHandler,
   type ApprovalRequest,
   type ChatMessage,
 } from '../core/index.js';
@@ -40,6 +46,58 @@ export interface SendOptions {
   /** Every AG-UI event of the turn, in order. */
   onEvent: (event: AGUIEvent) => void;
   signal?: AbortSignal;
+  /**
+   * Who wrote the message, for the injection screen. A person typing to
+   * their own agent by default; `agent` for a task one agent hands another.
+   */
+  origin?: 'operator' | 'agent';
+}
+
+export interface SessionOptions {
+  /**
+   * How writes are approved. By default each one ends the AG-UI run with an
+   * interrupt for the client to answer with `resume`; with nobody there to
+   * answer (an unattended CLI run, a subagent) pass a policy instead.
+   */
+  approve?: ApprovalHandler;
+  /** Called once by `close`, for whatever the session holds (its subagents). */
+  onClose?: () => void;
+  /** Work running beside the conversation that the model should hear about. */
+  background?: Background;
+}
+
+/** Work a session runs beside the conversation: its subagents. */
+export interface Background {
+  /**
+   * What has happened that the model has not been told yet (subagents that
+   * finished), taken once: a later call does not return it again.
+   * Undefined when there is none.
+   */
+  takeNews(): string | undefined;
+  /** Settles once no work is left that could make news. */
+  idle(): Promise<void>;
+  /** Call `listener` whenever there may be news. */
+  onNews(listener: () => void): void;
+  /**
+   * Where the work stands, while any runs: added to the model's copy of
+   * every message that opens a turn, so its picture stays current.
+   */
+  status(): string | undefined;
+}
+
+type OpeningRole = 'user' | 'developer';
+
+const noop = () => {};
+
+/**
+ * A turn the session starts itself, for its client to run as it runs
+ * `send`: with its own event handler and stop signal. Call it straight away.
+ */
+export type AutoTurn = (options: Omit<SendOptions, 'origin'>) => Promise<string>;
+
+/** An approval policy for a session nobody is attending: decline every write, saying so. */
+export function declineUnattended(request: ApprovalRequest): ToolVerdict {
+  return { allow: false, tell: declinedMessage(request.tool, 'unattended') };
 }
 
 /**
@@ -61,7 +119,65 @@ export class Session {
   private thread: Message[] = [];
   private readonly pending = new Map<string, (entry: ResumeEntry) => void>();
 
-  constructor(private readonly agent: Agent) {}
+  private closed = false;
+  /**
+   * Settles once the turn running now has ended and any news turn after it
+   * has started; undefined while no turn runs.
+   */
+  private running: Promise<void> | undefined;
+  private autoTurn: ((turn: AutoTurn) => void) | undefined;
+
+  constructor(
+    private readonly agent: Agent,
+    private readonly options: SessionOptions = {}
+  ) {
+    options.background?.onNews(() => this.notify());
+  }
+
+  /** Release what the session holds. Once only. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.options.onClose?.();
+  }
+
+  /**
+   * Run turns the session starts itself: when its background work has news
+   * and no turn is running, `handler` is called with the turn to run.
+   * Without a handler, news waits until one is set.
+   * Returns the call that removes the handler.
+   */
+  onAutoTurn(handler: (turn: AutoTurn) => void): () => void {
+    this.autoTurn = handler;
+    this.notify();
+    return () => {
+      if (this.autoTurn === handler) this.autoTurn = undefined;
+    };
+  }
+
+  /**
+   * Settles once the session has nothing left to do: no turn running, no
+   * background work, and no news waiting for a turn.
+   */
+  async idle(): Promise<void> {
+    for (;;) {
+      await this.running;
+      await this.options.background?.idle();
+      // Work that has just finished started its news turn as it finished.
+      if (!this.running) return;
+    }
+  }
+
+  /**
+   * There may be news: start a turn for it, unless one is running, whose
+   * end looks again.
+   */
+  private notify(): void {
+    if (this.closed || this.running || !this.autoTurn) return;
+    const news = this.options.background?.takeNews();
+    if (!news) return;
+    this.autoTurn((options) => this.run(news, 'developer', { ...options, origin: 'agent' }));
+  }
 
   /** The AG-UI thread so far. */
   get messages(): readonly Message[] {
@@ -73,8 +189,38 @@ export class Session {
    * interrupts in between; rejects with the error that ended it, after the
    * stream has reported it (RUN_ERROR, or a cancelled RUN_FINISHED).
    */
-  async send(text: string, { onEvent, signal }: SendOptions): Promise<string> {
-    const user: ChatMessage = { role: 'user', content: text, origin: 'operator' };
+  send(text: string, options: SendOptions): Promise<string> {
+    return this.run(text, 'user', options);
+  }
+
+  private async run(text: string, role: OpeningRole, options: SendOptions): Promise<string> {
+    // Not awaited when idle, so the first turn still starts synchronously.
+    while (this.running) await this.running;
+    const turn = this.turn(text, role, options);
+    this.running = turn.then(noop, noop).then(() => {
+      this.running = undefined;
+      this.notify();
+    });
+    return turn;
+  }
+
+  private async turn(
+    text: string,
+    role: OpeningRole,
+    { onEvent, signal, origin = 'operator' }: SendOptions
+  ): Promise<string> {
+    // The model reads where the background work stands with this message,
+    // in the same message rather than one of its own, since some chat
+    // templates (Gemma's) refuse two user messages in a row. The transcript
+    // keeps the words alone, so old snapshots never contradict the current.
+    const status = this.options.background?.status();
+    const user: ChatMessage = { role: 'user', content: text, origin };
+    const sent: ChatMessage = status ? { ...user, content: `${text}\n\n${status}` } : user;
+    // The agent copies its input, so the sent message is found by its text.
+    const kept = (messages: ChatMessage[]) => {
+      const at = messages.findLastIndex((m) => m.role === 'user' && m.content === sent.content);
+      return messages.map((m, i) => (i === at ? { ...m, content: text } : m));
+    };
     const encoder = new TurnEncoder(this.threadId, {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
@@ -85,14 +231,14 @@ export class Session {
 
     // Synchronous up to the agent's first await, so a client draws the
     // person's message the moment it calls send.
-    encoder.startTurn({ id: crypto.randomUUID(), text });
+    encoder.startTurn({ id: crypto.randomUUID(), text, role });
     try {
-      const result = await this.agent.runMessages([...this.transcript, user], {
+      const result = await this.agent.runMessages([...this.transcript, sent], {
         signal,
         onEvent: (event) => encoder.handle(event),
-        approve: (request) => this.interrupt(request, encoder),
+        approve: this.options.approve ?? ((request) => this.interrupt(request, encoder)),
       });
-      this.transcript = result.messages;
+      this.transcript = kept(result.messages);
       encoder.complete();
       return result.output;
     } catch (error) {

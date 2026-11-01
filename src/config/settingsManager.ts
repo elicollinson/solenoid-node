@@ -13,7 +13,7 @@ export interface SectionInfo {
 const KNOWN_SECTIONS: Record<string, { displayName: string; description: string }> = {
   providers: { displayName: 'Providers', description: 'LM Studio and OpenRouter connections' },
   routes: { displayName: 'Routes', description: 'Ordered model fallback chain' },
-  agent: { displayName: 'Agent', description: 'Reasoning, deadline and system prompt' },
+  agent: { displayName: 'Agent', description: 'Reasoning, turn limit and system prompt' },
   screening: { displayName: 'Screening', description: 'Prompt-injection judge' },
   search: { displayName: 'Search', description: 'Web search provider' },
   mcp_servers: { displayName: 'MCP Servers', description: 'MCP server connections' },

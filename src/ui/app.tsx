@@ -3,14 +3,16 @@
  *
  * The terminal UI: an AG-UI client of one session. It folds every event
  * into its thread and draws a view of it; an approval interrupt opens the
- * prompt, whose answer resumes the run.
+ * prompt, whose answer resumes the run. Turns the session starts itself (a
+ * subagent finished) run here just like the person's.
  */
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useRef, useState } from 'react';
+import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
+  type AutoTurn,
   CUSTOM_EVENTS,
   applyEvent,
   approvalAnswer,
@@ -221,22 +223,14 @@ function AppContent() {
     session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
   };
 
-  const handleSubmit = (text: string) => {
-    uiLogger.info({ text }, 'handleSubmit called');
-
-    if (text.startsWith('/')) {
-      handleSlashCommand(text);
-      return;
-    }
-
+  const runTurn = (turn: AutoTurn) => {
     setIsProcessing(true);
     setStatus('Thinking...');
     const controller = new AbortController();
     abortRef.current = controller;
     // A promise chain rather than try/finally, which React Compiler cannot
     // compile yet.
-    session
-      .send(text, { signal: controller.signal, onEvent })
+    turn({ signal: controller.signal, onEvent })
       .catch((error) => {
         if (!(error instanceof AgentAbortedError)) {
           uiLogger.error({ error: String(error) }, 'Run failed');
@@ -244,11 +238,27 @@ function AppContent() {
         addSystemMessage(describeRunError(error));
       })
       .then(() => {
+        // A news turn the session started as this one ended owns the state now.
+        if (abortRef.current !== controller) return;
         abortRef.current = null;
         setOpenApproval(null);
         setIsProcessing(false);
         setStatus('Ready');
       });
+  };
+
+  const runAutoTurn = useEffectEvent(runTurn);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an effect event is never a dependency.
+  useEffect(() => session.onAutoTurn((turn) => runAutoTurn(turn)), [session]);
+
+  const handleSubmit = (text: string) => {
+    uiLogger.info({ text }, 'handleSubmit called');
+
+    if (text.startsWith('/')) {
+      handleSlashCommand(text);
+      return;
+    }
+    runTurn((options) => session.send(text, options));
   };
 
   if (screen === 'settings') {

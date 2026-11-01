@@ -35,6 +35,40 @@ Answers:
 
 authoredText.offer('prompt:system', DEFAULT_SYSTEM_PROMPT);
 
+/** Added to the parent's prompt when it can spawn subagents. */
+export const SUBAGENT_GUIDE = `Subagents:
+- For work that splits into independent parts, or takes a while, spawn_subagent starts another agent on it in the background. Give it a complete, self-contained task: it cannot see this conversation.
+- After spawning, tell the person what is running and end your turn. Never wait on subagents or check on them in a loop.
+- Each subagent sends you a message when it finishes, as a turn of its own. While any are running, every message you get ends with the status of all of them.
+- Answer the person once you have what they asked for. You can spawn more at any time, including while others run.
+- Once a subagent has finished, subagent_summary and read_subagent_transcript show what it did. message_subagent sends one a follow-up; a finished one starts again on it.
+- A subagent cannot ask the person anything, and its writes are declined.`;
+
+/** How subagent resolutions are introduced to the parent, after a line naming them. */
+export const SUBAGENT_NEWS =
+  'This is a message from your subagents, not from the person. If you now have what the person asked for, answer them. If you still need subagents that are running, tell the person in one short line what has come back and what you are waiting for.';
+
+/** What a spawn or a message that starts a subagent tells the model to do next. */
+export const SUBAGENT_STARTED =
+  'It is working in the background. Do not check on it or start it again. If there is nothing else to do now, tell the person in a short line what is running and end your turn; you will get a message when it finishes.';
+
+/** Heads the status of the subagents at the end of each parent message. */
+export const SUBAGENT_STATUS = 'Status of your subagents as of this message:';
+
+/** A subagent's standing instructions, after the main prompt. */
+export const SUBAGENT_ROLE =
+  'You are a subagent. Another agent gave you the task below and reads your final answer; the person does not see this conversation. Work the task through, then always end with a final message: what you found and where, or that there was nothing to report. If you could not do part of it, say which part and why.';
+
+/** The instructions of the model that summarizes a subagent's work for its parent. */
+export const SUMMARIZER_PROMPT = `You summarize a subagent's work for the agent that started it. You are given the task and the subagent's transcript. In a few sentences: what it did, what it found or produced, what failed or is still open, and where it stands now. Report only what the transcript shows.`;
+
+authoredText.offer('prompt:subagent-guide', SUBAGENT_GUIDE);
+authoredText.offer('prompt:subagent-news', SUBAGENT_NEWS);
+authoredText.offer('prompt:subagent-status', SUBAGENT_STATUS);
+authoredText.offer('prompt:subagent-started', SUBAGENT_STARTED);
+authoredText.offer('prompt:subagent-role', SUBAGENT_ROLE);
+authoredText.offer('prompt:summarizer', SUMMARIZER_PROMPT);
+
 /**
  * The prompt with today's date appended. Without it the model dates "this
  * week" from its training data, a year or more out.

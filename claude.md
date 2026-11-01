@@ -10,12 +10,12 @@ Before pushing any code changes, you **must** complete the following verificatio
 
 After making any code changes, start by running the `/simplify` skill on the branch. It reviews the diff for reuse, simplification, efficiency and altitude issues, then applies the fixes.
 
-### 2. Run Unit Tests
+### 2. Run What CI Runs
 
-Execute the test suite to ensure all tests pass:
+Lint, type check, the full test suite and the build, stopping at the first failure:
 
 ```bash
-bun test
+bun run verify
 ```
 
 ### 3. Functional Testing with Agent Harness
@@ -31,7 +31,7 @@ bun test tests/e2e/harness-integration.test.tsx
 Before pushing code, confirm all of the following:
 
 - [ ] `/simplify` has been run
-- [ ] All unit tests pass
+- [ ] `bun run verify` passes (lint, type check, unit tests, build)
 - [ ] Functional tests via agent harness pass
 
 ## Important Notes

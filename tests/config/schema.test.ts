@@ -12,7 +12,7 @@ describe('AppSettingsSchema', () => {
     expect(result.providers.lmstudio.base_url).toBe('http://localhost:1234/v1');
     expect(result.providers.openrouter.base_url).toBe('https://openrouter.ai/api/v1');
     expect(result.routes.map((r) => r.provider)).toEqual(['lmstudio', 'openrouter']);
-    expect(result.agent).toEqual({ think: true, timeout_ms: 300_000, max_turns: 25 });
+    expect(result.agent).toEqual({ think: true, max_turns: 25 });
     expect(result.screening.enabled).toBe(true);
     expect(result.keyboard.interrupt).toBe('escape');
     expect(result.display.show_reasoning).toBe(false);

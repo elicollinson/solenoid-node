@@ -11,6 +11,7 @@ A single-agent harness with a React terminal UI, built on Bun. It runs Gemma 4 2
 - **AG-UI 1.0 as the UI contract.** A conversation streams as standard [AG-UI](https://docs.ag-ui.com) events: text, reasoning, tool calls, chart components, approvals as interrupts. Any AG-UI client can draw it; the terminal UI is one.
 - **Ink terminal UI.** Streaming markdown, tool-status lines, inline charts, a settings editor and slash commands.
 - **Tools.** Brave web search, a web page reader, charts, plus any number of **MCP servers** (stdio or HTTP).
+- **Subagents.** The session you talk to can start background subagents on self-contained tasks, wait for them, and read their summaries and transcripts.
 - **Non-interactive mode.** `solenoid --run "<prompt>"` streams the answer to stdout.
 - **OpenTelemetry tracing** with OpenInference spans, with optional W&B Weave export.
 
@@ -102,6 +103,24 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
 
+### Subagents
+
+`harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:
+
+| Tool | Does |
+|------|------|
+| `spawn_subagent(name, task, tools?)` | Starts a child session in the background, with the parent's tools (or a subset) minus these |
+| `subagent_summary(id)` | A model-written summary of a finished one's work, reused until its transcript grows |
+| `read_subagent_transcript(id, from, count)` | A page of a finished one's transcript in detail |
+| `message_subagent(id, message)` | A follow-up: a running one reads it when its current turn ends, a finished one starts again on it |
+| `cancel_subagent(id)` | Stops one |
+
+Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model's request slots and context are shared. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended.
+
+The parent orchestrates and never blocks on a child. It spawns subagents, tells the person what is running, and ends its turn, so the person can keep talking to it and it can spawn more at any time. While any subagent runs, the model's copy of every message that opens a parent turn ends with their status. That covers the person's messages and the subagents' own. Those at work are listed with their task, and finished ones go on one line. It goes with the current message only: the thread and the stored transcript keep the words alone.
+
+Every subagent that resolves, done or failed, sends the parent a message: its final answer, or "Nothing to report." A cancelled one sends none, since only the parent cancels. The session starts a turn of its own for these messages as soon as no turn is running, batching any that arrive together. That turn opens with an AG-UI `developer` message rather than a user one, which the terminal UI draws as a system line, and the message goes to the model as `agent` text. A client opts in with `session.onAutoTurn(turn => ...)` and runs the turn as it runs `send`. Turns never overlap: a `send` made while one is running waits for it. The one-shot CLI waits on `session.idle()` before it exits, so it writes the answers of these turns too.
+
 ### Screening
 
 | Text | Boundary | On a flag |
@@ -122,6 +141,9 @@ Text this repository wrote (tool descriptions, the system prompt) is subtracted 
 providers:
   lmstudio:
     base_url: http://localhost:1234/v1   # api_key optional; or LMSTUDIO_API_KEY
+    stall:                 # only silence fails a request; slow streaming never does
+      first_byte_ms: 300000  # queue + prompt processing
+      idle_ms: 60000         # between chunks
   openrouter:
     base_url: https://openrouter.ai/api/v1   # key from OPENROUTER_API_KEY
 
@@ -133,7 +155,6 @@ routes:                    # tried in order
 
 agent:
   think: true              # true | false | low | medium | high
-  timeout_ms: 300000       # per route attempt
   max_turns: 25            # model calls per attempt; the last is offered no tools
   # system_prompt: ...     # replaces the built-in prompt
 
