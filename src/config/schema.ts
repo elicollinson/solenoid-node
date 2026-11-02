@@ -121,6 +121,19 @@ export const DisplayConfigSchema = z
   })
   .prefault({});
 
+export const PERMISSION_MODES = ['allow', 'ask', 'deny'] as const;
+
+export const ApprovalsConfigSchema = z
+  .object({
+    /**
+     * Standing answers for write tools, keyed by tool name (`calendar_create`),
+     * capability (`calendar.write`) or `*`. Deny anywhere wins; otherwise the
+     * most specific key decides, and with none the person is asked.
+     */
+    rules: z.record(z.string().min(1), z.enum(PERMISSION_MODES)).default({}),
+  })
+  .prefault({});
+
 export const AppSettingsSchema = z.object({
   providers: ProvidersConfigSchema,
   routes: RoutesConfigSchema,
@@ -130,6 +143,7 @@ export const AppSettingsSchema = z.object({
   mcp_servers: z.record(z.string(), McpServerSchema).default({}),
   keyboard: KeyboardConfigSchema,
   display: DisplayConfigSchema,
+  approvals: ApprovalsConfigSchema,
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;

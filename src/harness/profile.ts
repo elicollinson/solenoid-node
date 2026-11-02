@@ -15,6 +15,7 @@
  */
 import { authoredText } from '@elicollinson/solenoid-security';
 import type { AgentTool, ApprovalHandler } from '../core/index.js';
+import type { PermissionRules } from './permissions.js';
 import { type ToolGroup, toolGroupOpener } from './toolGroups.js';
 
 export interface AgentProfile {
@@ -35,9 +36,25 @@ export interface AgentProfile {
    * closed; to hold one open from the start, pass its tools in `tools`.
    */
   toolGroups?: ToolGroup[];
-  /** Hold the subagent tools. Children get this profile's tools and prompt. */
+  /**
+   * Hold no write tool at all: base, own and group tools alike. For an agent
+   * that reads text a stranger wrote, so that text cannot steer it into a
+   * change. Briefings list only the tools left; a group left with none is
+   * dropped. Write a group's briefing about acts, not write tools by name.
+   */
+  readOnly?: boolean;
+  /** Hold the subagent tools. Children get this profile's tools, prompt and rules. */
   canSpawn?: boolean;
-  /** How writes are approved (see SessionOptions). */
+  /**
+   * Standing rules for this agent's writes (./permissions.ts), checked
+   * together with the person's from settings: a deny in either wins.
+   */
+  permissions?: PermissionRules;
+  /**
+   * Who answers a write the rules leave at ask: by default the person, through
+   * an interrupt. The rules always answer first, so an app that decides every
+   * write itself runs with no `approvals.rules` and no `permissions`.
+   */
   approve?: ApprovalHandler;
 }
 
@@ -59,8 +76,9 @@ const nameOf = (tool: AgentTool) => tool.definition.function.name;
 
 /**
  * What the agent holds from the start: the base tools less the excluded ones,
- * the profile's own, and the opener of its groups. A name clash anywhere,
- * group tools included, is refused by Agent.addTool when the session opens.
+ * the profile's own, and the opener of its groups; with `readOnly`, none of
+ * them a write. A name clash anywhere, group tools included, is refused by
+ * Agent.addTool when the session opens.
  */
 export function profileTools(base: readonly AgentTool[], profile: AgentProfile): AgentTool[] {
   const excluded = new Set(profile.exclude);
@@ -70,6 +88,13 @@ export function profileTools(base: readonly AgentTool[], profile: AgentProfile):
       `Cannot exclude ${[...excluded].join(', ')}: the base tools are ${base.map(nameOf).join(', ')}`
     );
   }
-  const opener = toolGroupOpener(profile.toolGroups ?? []);
-  return [...kept, ...(profile.tools ?? []), ...(opener ? [opener] : [])];
+  const allowed = (tools: readonly AgentTool[]) =>
+    profile.readOnly ? tools.filter((tool) => tool.kind !== 'write') : tools;
+  const groups = profile.readOnly
+    ? (profile.toolGroups ?? [])
+        .map((group) => ({ ...group, tools: allowed(group.tools) }))
+        .filter((group) => group.tools.length)
+    : (profile.toolGroups ?? []);
+  const opener = toolGroupOpener(groups);
+  return [...allowed(kept), ...allowed(profile.tools ?? []), ...(opener ? [opener] : [])];
 }

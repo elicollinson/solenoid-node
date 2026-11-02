@@ -152,6 +152,24 @@ Groups describe tasks, so they can overlap: share a tool by passing the same `Ag
 
 The core knows nothing of groups. Any tool can carry `unlocks: { tools, unlocked(messages) }`: the agent checks every name in `tools` when it is built, and before each model call offers those `unlocked` returns for the transcript so far.
 
+#### Read-only agents
+
+`readOnly: true` gives a profile no write tool at all: base, its own and group tools alike. Use it for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. Briefings list only the tools left, and a group left with none is dropped, so write a group's briefing about acts rather than naming write tools.
+
+### Approval rules
+
+A write tool asks before it runs. Standing rules answer instead of a person, so the same question is not asked every time:
+
+```yaml
+approvals:
+  rules:
+    calendar.write: allow        # a capability: every calendar_* write
+    notion-create-pages: ask     # one tool
+    "*": deny                    # everything else
+```
+
+A rule is keyed by a tool's name, its capability (its name up to the first `_` or `-`, then `.write`, the way Solenoid-Assistant names them) or `*`, and is `allow`, `ask` or `deny`. A deny anywhere wins. Otherwise the most specific key decides, and with no rule the person is asked. A profile can carry `permissions` of its own, checked together with these. In the terminal, answering `a` to an approval allows that tool from then on (`harness.allowAlways`) and saves the rule. The one-shot CLI and subagents follow the same rules; what is left at ask is declined there, since nobody can answer (or allowed, with `--yes`). The core only asks. An app with its own store of rules passes its own `approve`, which answers whatever the harness's rules leave at ask; the rules always answer first, so for full control run with none.
+
 ### Subagents
 
 `harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:
@@ -164,7 +182,7 @@ The core knows nothing of groups. Any tool can carry `unlocks: { tools, unlocked
 | `message_subagent(id, message)` | A follow-up: a running one reads it when its current turn ends, a finished one starts again on it |
 | `cancel_subagent(id)` | Stops one |
 
-Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model's request slots and context are shared. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended.
+Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model's request slots and context are shared. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. A subagent follows its parent's approval rules; nobody can answer the writes they leave at ask, so those are declined as unattended.
 
 The parent orchestrates and never blocks on a child. It spawns subagents, tells the person what is running, and ends its turn, so the person can keep talking to it and it can spawn more at any time. While any subagent runs, the model's copy of every message that opens a parent turn ends with their status. That covers the person's messages and the subagents' own. Those at work are listed with their task, and finished ones go on one line. It goes with the current message only: the thread and the stored transcript keep the words alone.
 

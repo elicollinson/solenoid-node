@@ -60,6 +60,12 @@ export interface SessionOptions {
    * answer (an unattended CLI run, a subagent) pass a policy instead.
    */
   approve?: ApprovalHandler;
+  /**
+   * A policy in front of whoever is asked: given that asker (`approve`, else
+   * the interrupt), returns the handler the run uses. The harness puts its
+   * standing rules here (./permissions.ts).
+   */
+  policy?: (ask: ApprovalHandler) => ApprovalHandler;
   /** Called once by `close`, for whatever the session holds (its subagents). */
   onClose?: () => void;
   /** Work running beside the conversation that the model should hear about. */
@@ -237,11 +243,13 @@ export class Session {
     // Synchronous up to the agent's first await, so a client draws the
     // person's message the moment it calls send.
     encoder.startTurn({ id: crypto.randomUUID(), text, role });
+    const ask: ApprovalHandler =
+      this.options.approve ?? ((request) => this.interrupt(request, encoder));
     try {
       const result = await this.agent.runMessages([...this.transcript, sent], {
         signal,
         onEvent: (event) => encoder.handle(event),
-        approve: this.options.approve ?? ((request) => this.interrupt(request, encoder)),
+        approve: this.options.policy?.(ask) ?? ask,
       });
       this.transcript = kept(result.messages);
       encoder.complete();

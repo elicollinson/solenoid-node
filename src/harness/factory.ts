@@ -19,10 +19,12 @@ import {
   getProviderApiKey,
   getSearchApiKey,
   getSettingsPath,
+  saveApprovalRule,
 } from '../config/index.js';
 import {
   Agent,
   type AgentTool,
+  type ApprovalHandler,
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
@@ -33,6 +35,7 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
+import { resolvePermission, withPermissions } from './permissions.js';
 import { type AgentProfile, profileTools } from './profile.js';
 import {
   DEFAULT_SYSTEM_PROMPT,
@@ -163,6 +166,12 @@ export interface Harness {
    * child that finishes starts a turn with its result (Session.onAutoTurn).
    */
   createSession(profile?: AgentProfile): Session;
+  /**
+   * Allow `tool` from now on: live for every session at its next write, and
+   * saved to `approvals.rules`. Undefined when saved; otherwise why the save
+   * failed, and the rule holds only until the process ends.
+   */
+  allowAlways(tool: string): string | undefined;
   close(): Promise<void>;
 }
 
@@ -202,18 +211,24 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
 
   // Every open session, so closing the harness closes them and their subagents.
   const sessions = new Set<Session>();
+  // The person's standing rules, live: allowAlways adds to them in place.
+  const rules = settings.approvals.rules;
   const createSession: Harness['createSession'] = (profile = {}) => {
     const name = profile.name ?? 'solenoid';
     const agentTools = profileTools(tools, profile);
     const prompt = profile.systemPrompt ?? systemPrompt;
+    // The rules answer first, before any asker, and are read at each write,
+    // so a rule added while the session runs applies to its next one.
+    const policy = (ask: ApprovalHandler) =>
+      withPermissions((tool) => resolvePermission([rules, profile.permissions ?? {}], tool), ask);
     const manager = profile.canSpawn
       ? new SubagentManager({
           tools: agentTools,
-          // Nobody can approve a child's writes: it is told each was declined, and says so.
+          // A child follows the same rules; nobody can answer its asks, so they are declined.
           createSession: (childName, childTools) =>
             new Session(
               makeAgent(`${name}/${childName}`, childTools, `${prompt}\n\n${SUBAGENT_ROLE}`),
-              { approve: declineUnattended }
+              { approve: declineUnattended, policy }
             ),
           summarize,
         })
@@ -223,6 +238,7 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       : makeAgent(name, agentTools, prompt);
     const session: Session = new Session(agent, {
       approve: profile.approve,
+      policy,
       background: manager,
       onClose: () => {
         manager?.close();
@@ -251,6 +267,11 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),
     ],
     createSession,
+    allowAlways: (tool) => {
+      rules[tool] = 'allow';
+      const saved = saveApprovalRule(tool);
+      return saved.isValid ? undefined : saved.errors.map((e) => e.message).join('; ');
+    },
     close: async () => {
       for (const session of sessions) session.close();
       await mcp.close();

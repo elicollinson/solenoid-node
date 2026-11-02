@@ -23,7 +23,11 @@ import {
   parseToolArgs,
 } from '../harness/index.js';
 import { uiLogger } from '../utils/logger.js';
-import { ApprovalPrompt, type PendingApproval } from './components/ApprovalPrompt.js';
+import {
+  type ApprovalAnswer,
+  ApprovalPrompt,
+  type PendingApproval,
+} from './components/ApprovalPrompt.js';
 import {
   ChatInput,
   ErrorBoundary,
@@ -216,11 +220,19 @@ function AppContent() {
     }
   };
 
-  const answerApproval = (allow: boolean) => {
+  const answerApproval = (answer: ApprovalAnswer) => {
     if (!openApproval || !approval) return;
     setOpenApproval(null);
+    const allow = answer !== 'decline';
     setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
     session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
+    if (answer === 'always') {
+      const failure = harness.allowAlways(approval.tool);
+      if (failure) {
+        uiLogger.warn({ failure, tool: approval.tool }, 'Could not save the approval rule');
+        addSystemMessage(`Allowing ${approval.tool} until you quit; it could not be saved.`);
+      }
+    }
   };
 
   const runTurn = (turn: AutoTurn) => {

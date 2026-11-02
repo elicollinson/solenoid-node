@@ -15,8 +15,9 @@
  * A child runs with the parent's tools, or a subset named at spawn, never
  * the subagent tools themselves: depth stays at one. At most a few run at
  * once and the rest queue, since a local model's request slots and context
- * are shared. Nobody can approve a child's writes yet, so the factory makes
- * each child session decline them as unattended.
+ * are shared. A child follows its parent's standing approval rules, and
+ * nobody can answer the writes they leave at ask, so the factory makes each
+ * child session decline those as unattended.
  */
 import { type Message, contentToText } from '@ag-ui/core';
 import { z } from 'zod';
