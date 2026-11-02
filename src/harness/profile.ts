@@ -14,7 +14,7 @@
  * them.
  */
 import { authoredText } from '@elicollinson/solenoid-security';
-import type { AgentTool, ApprovalHandler } from '../core/index.js';
+import { type AgentTool, type ApprovalHandler, toolName } from '../core/index.js';
 import type { PermissionRules } from './permissions.js';
 import { type ToolGroup, toolGroupOpener } from './toolGroups.js';
 
@@ -73,20 +73,18 @@ export function defineProfile(profile: AgentProfile): AgentProfile {
   return profile;
 }
 
-const nameOf = (tool: AgentTool) => tool.definition.function.name;
-
 /**
  * What the agent holds from the start: the base tools less the excluded ones,
- * the profile's own, and the opener of its groups; with `readOnly`, none of
- * them a write. A name clash anywhere, group tools included, is refused by
- * Agent.addTool when the session opens.
+ * the profile's own, and the opener of its groups; with `readOnly`, no write
+ * among them or in its groups. A name clash anywhere, group tools included,
+ * is refused by Agent.addTool when the session opens.
  */
 export function profileTools(base: readonly AgentTool[], profile: AgentProfile): AgentTool[] {
   const excluded = new Set(profile.exclude);
-  const kept = base.filter((tool) => !excluded.delete(nameOf(tool)));
+  const kept = base.filter((tool) => !excluded.delete(toolName(tool)));
   if (excluded.size) {
     throw new Error(
-      `Cannot exclude ${[...excluded].join(', ')}: the base tools are ${base.map(nameOf).join(', ')}`
+      `Cannot exclude ${[...excluded].join(', ')}: the base tools are ${base.map(toolName).join(', ')}`
     );
   }
   const allowed = (tools: readonly AgentTool[]) =>
@@ -97,17 +95,13 @@ export function profileTools(base: readonly AgentTool[], profile: AgentProfile):
     .map((group) => ({ ...group, tools: allowed(group.tools) }))
     .filter((group) => group.tools.length);
   const opener = toolGroupOpener(groups);
-  const held = [...allowed(kept), ...allowed(profile.tools ?? []), ...(opener ? [opener] : [])];
-  // Read-only reaches whatever a held tool can unlock, not only groups.
-  return held.map((tool) => {
-    const { unlocks } = tool;
-    if (!profile.readOnly || !unlocks) return tool;
-    return {
-      ...tool,
-      unlocks: {
-        tools: allowed(unlocks.tools),
-        unlocked: (messages) => allowed(unlocks.unlocked(messages)),
-      },
-    };
-  });
+  return [...allowed(kept), ...allowed(profile.tools ?? []), ...(opener ? [opener] : [])];
+}
+
+/**
+ * The agent's own rules: a read-only agent's are a hard deny on every write,
+ * which also covers any write a held tool unlocks.
+ */
+export function profilePermissions(profile: AgentProfile): PermissionRules {
+  return profile.readOnly ? { '*': 'deny' } : (profile.permissions ?? {});
 }

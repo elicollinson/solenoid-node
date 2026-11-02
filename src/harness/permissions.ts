@@ -51,7 +51,7 @@ export function capabilityFor(tool: string): string {
 }
 
 /** What one set of rules says about `tool`: its most specific key's mode, if any. */
-export function ruleFor(rules: PermissionRules, tool: string): PermissionMode | undefined {
+function ruleFor(rules: PermissionRules, tool: string): PermissionMode | undefined {
   for (const key of [tool, capabilityFor(tool), '*']) {
     if (Object.hasOwn(rules, key)) return rules[key];
   }

@@ -5,8 +5,9 @@ import { type AGUIEvent, EventType } from '@ag-ui/core';
  * Executes a single prompt and writes the answer to stdout once the agent
  * has given it. Status and errors go to stderr, so stdout stays pipeable.
  * Standing approval rules answer first; nobody is present to answer the rest,
- * so those writes are declined unless `--yes` was given. Subagents still running when the agent answers
- * are waited for, and the turns their news starts write answers too.
+ * so those writes are declined unless `--yes` was given. Subagents still
+ * running when the agent answers are waited for, and the turns their news
+ * starts write answers too.
  */
 import { loadSettings } from './config/index.js';
 import {

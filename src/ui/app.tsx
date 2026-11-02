@@ -9,6 +9,7 @@
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
 import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { type AppSettings, saveApprovalRule } from '../config/index.js';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
@@ -227,9 +228,13 @@ function AppContent() {
     setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
     session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
     if (answer === 'always') {
-      const failure = harness.allowAlways(approval.tool);
-      if (failure) {
-        uiLogger.warn({ failure, tool: approval.tool }, 'Could not save the approval rule');
+      const saved = saveApprovalRule(approval.tool);
+      if (saved.isValid) {
+        // The rules as saved, which is what every session reads from now on.
+        harness.setApprovalRules((saved.parsedValue as AppSettings['approvals']).rules);
+      } else {
+        harness.setApprovalRules({ ...harness.settings.approvals.rules, [approval.tool]: 'allow' });
+        uiLogger.warn({ errors: saved.errors, tool: approval.tool }, 'Could not save the rule');
         addSystemMessage(`Allowing ${approval.tool} until you quit; it could not be saved.`);
       }
     }

@@ -2,29 +2,20 @@
  * Approval rules and read-only profiles. No network.
  */
 import { describe, expect, test } from 'bun:test';
-import { z } from 'zod';
 import { AppSettingsSchema } from '../../src/config/index.js';
-import { Agent, type AgentTool, type ApprovalRequest, defineTool } from '../../src/core/index.js';
+import { Agent, type ApprovalRequest } from '../../src/core/index.js';
 import {
   OPEN_TOOL_GROUP,
   Session,
   capabilityFor,
   defineToolGroup,
+  profilePermissions,
   profileTools,
   resolvePermission,
   withPermissions,
 } from '../../src/harness/index.js';
 import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
-import { toolNames as names, readTool } from '../helpers/tools.js';
-
-const writeTool = (name: string): AgentTool =>
-  defineTool({
-    name,
-    description: `The ${name} tool.`,
-    kind: 'write',
-    schema: z.object({}),
-    execute: () => `${name} ran`,
-  });
+import { toolNames as names, readTool, writeTool } from '../helpers/tools.js';
 
 const request = (tool: string) =>
   ({ tool, toolCallId: 'c1', signal: new AbortController().signal }) as unknown as ApprovalRequest;
@@ -174,16 +165,14 @@ describe('a read-only profile', () => {
     expect(opener.definition.function.description).not.toContain('outbox');
   });
 
-  test('reaches what any held tool can unlock, not only groups', () => {
-    const send = writeTool('gmail_send');
-    const draft = readTool('gmail_draft_view');
-    const unlocker: AgentTool = {
-      ...readTool('gmail_open'),
-      unlocks: { tools: [draft, send], unlocked: () => [draft, send] },
-    };
-    const [held] = profileTools([], { readOnly: true, tools: [unlocker] });
-    expect(names(held!.unlocks!.tools)).toEqual(['gmail_draft_view']);
-    expect(names(held!.unlocks!.unlocked([]))).toEqual(['gmail_draft_view']);
+  test('denies every write, whatever reached it, over any rule of its own or the person’s', () => {
+    const own = profilePermissions({ readOnly: true, permissions: { gmail_send: 'allow' } });
+    expect(own).toEqual({ '*': 'deny' });
+    // A write unlocked by some other tool, allowed by the person: still denied.
+    expect(resolvePermission({ gmail_send: 'allow' }, own, 'gmail_send')).toBe('deny');
+    expect(profilePermissions({ permissions: { gmail_send: 'allow' } })).toEqual({
+      gmail_send: 'allow',
+    });
   });
 
   test('a read-only profile with nothing left to open holds no opener', () => {

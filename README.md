@@ -146,15 +146,11 @@ const calendar = (db: Db) =>
 harness.createSession(defineProfile({ name: 'assistant', toolGroups: [calendar(db), reminders(db)] }));
 ```
 
-The agent holds one tool for all of them, `open_tool_group(group)`, whose description lists each group by its summary. Opening one answers with the group's briefing and tool list, and its tools are offered from the next turn. A group is open once the transcript holds a completed call that opened it, so it stays open for the rest of the conversation, closes on `/clear`, and is not carried into a route fallback that replays the attempt without that call. To hold a group open from the start, pass its tools in `tools` instead. `session.toolNames` lists group tools after the held ones.
-
-Groups describe tasks, so they can overlap: share a tool by passing the same `AgentTool` object to every group that needs it, or to a group and `tools`, and it is registered and sent to the model once (tools are known by identity; see `Agent.addTool`). When a group is opened, its briefing describes only the tools it adds and names the rest as already available. Opening a group that is already open answers in one line. A subagent can open groups when it is given `open_tool_group`. The summary and briefing are registered as authored text, so write them in code. On a local model, opening a group changes the tool list at the top of the prompt, so the next turn reprocesses the conversation once.
-
-The core knows nothing of groups. Any tool can carry `unlocks: { tools, unlocked(messages) }`: the agent checks every name in `tools` when it is built, and before each model call offers those `unlocked` returns for the transcript so far.
+The agent holds one tool for all of them, `open_tool_group(group)`, whose description lists each group by its summary. Opening one answers with the group's briefing, and its tools are offered from the next turn and stay open for the rest of the conversation. To hold a group open from the start, pass its tools in `tools` instead. Groups describe tasks, so they can share tools: pass the same `AgentTool` object to each and it is offered once (see `Agent.addTool`). Write summaries and briefings in code: they are registered as authored text. On a local model, opening a group reprocesses the conversation once. How it works is in `src/harness/toolGroups.ts`.
 
 #### Read-only agents
 
-`readOnly: true` gives a profile no write tool at all: base, its own and group tools alike. Use it for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. This also covers anything a held tool can unlock. Briefings list only the tools left, and a group left with none is dropped, so write a group's briefing about acts rather than naming write tools. As a second guard, any write that still reached the agent is denied when it is called.
+`readOnly: true` is for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. Its write tools, group ones included, are left out, and any write that still reaches it is denied.
 
 ### Approval rules
 
@@ -168,9 +164,9 @@ approvals:
     "*": deny                    # everything else
 ```
 
-A rule is keyed by a tool's name, its capability or `*`, and is `allow`, `ask` or `deny`. A capability is a tool's name up to the first `_` (or, with none, the first `-`), then `.write`: `calendar_create` → `calendar.write`, and an MCP tool `google-calendar_create_event` → `google-calendar.write`, so name MCP servers with `-` rather than `_`. Within one set of rules the most specific key decides, so the example denies everything except calendar writes and `notion-create-pages`. With no rule the person is asked.
+A rule is keyed by a tool's name, its capability (`calendar_create` → `calendar.write`; an MCP tool takes its server's name) or `*`. The most specific key decides, so the example denies everything except calendar writes and `notion-create-pages`; with no rule the person is asked. A profile's own `permissions` combine with yours: a deny from either is final, otherwise yours decides. The full rules are in `src/harness/permissions.ts`.
 
-A profile can carry `permissions` of its own. Its deny is a hard limit, and so is yours; otherwise your rule decides, then the profile's. In the terminal, answering `a` to an approval allows that tool from then on (`harness.allowAlways`) and saves the rule. The one-shot CLI and subagents follow the same rules; what is left at ask is declined there, since nobody can answer (or allowed, with `--yes`). The core only asks. An app with its own store of rules passes its own `approve`, which answers whatever the harness's rules leave at ask; the rules always answer first, so for full control run with none.
+Answering `a` to an approval allows that tool from then on and saves the rule; edits in `/settings` apply at once. The one-shot CLI and subagents follow the same rules, and decline what is left at ask (or allow it, with `--yes`). An app that decides every write itself runs with no rules and passes its own `approve`.
 
 ### Subagents
 

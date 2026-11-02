@@ -24,7 +24,13 @@
  */
 import { authoredText } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
-import { type AgentTool, type ChatMessage, type Unlocks, defineTool } from '../core/index.js';
+import {
+  type AgentTool,
+  type ChatMessage,
+  type Unlocks,
+  defineTool,
+  toolName,
+} from '../core/index.js';
 
 export const OPEN_TOOL_GROUP = 'open_tool_group';
 
@@ -67,8 +73,7 @@ export function defineToolGroup(group: ToolGroup): ToolGroup {
   return group;
 }
 
-const nameOf = (tool: AgentTool) => tool.definition.function.name;
-const names = (tools: readonly AgentTool[]) => tools.map(nameOf).join(', ');
+const names = (tools: readonly AgentTool[]) => tools.map(toolName).join(', ');
 
 /**
  * What opening a group answers with: its briefing, the tools it adds in
@@ -77,11 +82,11 @@ const names = (tools: readonly AgentTool[]) => tools.map(nameOf).join(', ');
 function briefingOf(group: ToolGroup, offered: ReadonlyMap<string, AgentTool>): string {
   const added: AgentTool[] = [];
   const had: AgentTool[] = [];
-  for (const tool of group.tools) (offered.has(nameOf(tool)) ? had : added).push(tool);
+  for (const tool of group.tools) (offered.has(toolName(tool)) ? had : added).push(tool);
   const parts = [group.briefing];
   if (added.length) {
     const lines = added.map(
-      (tool) => `- ${nameOf(tool)}: ${tool.definition.function.description.split('\n')[0]}`
+      (tool) => `- ${toolName(tool)}: ${tool.definition.function.description.split('\n')[0]}`
     );
     parts.push(`Tools now available:\n${lines.join('\n')}`);
   }

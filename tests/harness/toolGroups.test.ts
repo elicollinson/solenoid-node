@@ -11,7 +11,7 @@ import {
   toolGroupOpener,
 } from '../../src/harness/index.js';
 import { ScriptedProvider, type Step, call, say } from '../helpers/scripted-provider.js';
-import { toolNames as names, readTool as tool } from '../helpers/tools.js';
+import { toolNames as names, readTool as tool, toolContext } from '../helpers/tools.js';
 
 const calendar = defineToolGroup({
   name: 'calendar',
@@ -69,10 +69,7 @@ describe('toolGroupOpener', () => {
   });
 
   test('opening answers with the briefing and the tools it unlocks', async () => {
-    const answer = await opener.execute(
-      { group: 'calendar' },
-      { signal: new AbortController().signal, offered: new Map(), messages: [], commit: () => {} }
-    );
+    const answer = await opener.execute({ group: 'calendar' }, toolContext());
     expect(answer).toContain(calendar.briefing);
     expect(answer).toContain('- calendar_list: The calendar_list tool.');
   });

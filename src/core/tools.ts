@@ -167,6 +167,9 @@ export function defineTool<S extends z.ZodType>(config: {
   };
 }
 
+/** The name the model calls a tool by. */
+export const toolName = (tool: AgentTool): string => tool.definition.function.name;
+
 /** zod → JSON schema, without the meta-schema pointer backends don't want. */
 export function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const { $schema: _metaSchema, ...json } = z.toJSONSchema(schema) as Record<string, unknown>;

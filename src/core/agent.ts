@@ -155,6 +155,8 @@ interface Attempt {
   committed: boolean;
   /** The tools of the current turn: the agent's own plus any the transcript unlocked. */
   tools: ReadonlyMap<string, AgentTool>;
+  /** The attempt's own working copy of the transcript, as tools read it. */
+  messages: readonly ChatMessage[];
   /** Display content already shown this attempt, so an identical call is not drawn twice. */
   shown: Set<string>;
 }
@@ -329,6 +331,9 @@ export class Agent {
         await this.screenInputs(messages, emit);
         for (let index = 0; index < this.routes.length; index++) {
           const route = this.routes[index]!;
+          // Each attempt works on its own copy, so a failed trajectory never
+          // leaks into the next route's replay.
+          const working = messages.map((m) => ({ ...m }));
           const attempt: Attempt = {
             client: route.client,
             model: route.model,
@@ -338,11 +343,9 @@ export class Agent {
             schema: options.schema,
             committed: false,
             tools: this.tools,
+            messages: working,
             shown: new Set(),
           };
-          // Each attempt works on its own copy, so a failed trajectory never
-          // leaks into the next route's replay.
-          const working = messages.map((m) => ({ ...m }));
           try {
             const output = await this.runAttempt(working, attempt);
             span.setAttribute('agent.completed_route_index', index);
@@ -536,14 +539,14 @@ export class Agent {
           const kind = attempt.tools.get(call.name)?.kind;
           // Unknown tools fail fast; they go the sequential way like a write.
           if (kind && kind !== 'write') {
-            const output = this.runToolCall(call, attempt, messages);
+            const output = this.runToolCall(call, attempt);
             reads.push(output);
             outputs.push(output);
             continue;
           }
           await Promise.all(reads);
           reads = [];
-          const output = await this.runToolCall(call, attempt, messages);
+          const output = await this.runToolCall(call, attempt);
           outputs.push(Promise.resolve(output));
         }
 
@@ -613,11 +616,7 @@ export class Agent {
   }
 
   /** Run one tool call, reporting its start and end. Resolves to its outcome. */
-  private async runToolCall(
-    call: ToolCall,
-    attempt: Attempt,
-    messages: readonly ChatMessage[]
-  ): Promise<ToolOutcome> {
+  private async runToolCall(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
     const { id, name } = call;
     attempt.emit({
       type: 'tool_start',
@@ -627,7 +626,7 @@ export class Agent {
       args: call.arguments,
     });
     const started = performance.now();
-    const result = await this.invokeTool(call, attempt, messages);
+    const result = await this.invokeTool(call, attempt);
     const durationMs = Math.round(performance.now() - started);
     // A failure is logged with what was sent: the record a person needs to
     // see why a call keeps failing. Successes stay one short line.
@@ -685,11 +684,7 @@ export class Agent {
     return failed.map(({ name, review }) => `${name} Feedback: ${review.feedback}`).join('\n');
   }
 
-  private async invokeTool(
-    call: ToolCall,
-    attempt: Attempt,
-    messages: readonly ChatMessage[]
-  ): Promise<ToolOutcome> {
+  private async invokeTool(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
     const { id, name, arguments: rawArgs } = call;
     const tool = attempt.tools.get(name);
     if (!tool) return failed(`unknown tool "${name}"`);
@@ -747,7 +742,7 @@ export class Agent {
               tool.execute(tool.kind === 'display' ? withoutDone(args) : args, {
                 signal: attempt.signal,
                 offered: attempt.tools,
-                messages,
+                messages: attempt.messages,
                 commit: () => {
                   attempt.committed = true;
                 },
