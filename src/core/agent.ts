@@ -153,6 +153,8 @@ interface Attempt {
   schema?: z.ZodType;
   /** Set once a write tool has run. A committed attempt is never replayed. */
   committed: boolean;
+  /** The tools of the current turn: the agent's own plus any the transcript unlocked. */
+  tools: ReadonlyMap<string, AgentTool>;
   /** Display content already shown this attempt, so an identical call is not drawn twice. */
   shown: Set<string>;
 }
@@ -161,6 +163,8 @@ export class Agent {
   private readonly routes: ModelRouteChain;
   private readonly systemPrompt?: string;
   private readonly tools = new Map<string, AgentTool>();
+  /** Tools a held tool can unlock (AgentTool.unlocks), offered once a transcript unlocks them. */
+  private readonly unlockable = new Map<string, AgentTool>();
   private readonly reviewers = new Map<string, Reviewer>();
   private readonly think: ThinkLevel;
   private readonly maxTurns: number;
@@ -189,15 +193,25 @@ export class Agent {
     for (const reviewer of opts.reviewers ?? []) this.addReviewer(reviewer);
   }
 
+  /** Hold `tool`, and register what it can unlock. Every name is checked here, held or not. */
   addTool(tool: AgentTool): this {
+    this.tools.set(this.claim(tool), tool);
+    for (const unlockable of tool.unlocks?.tools ?? []) {
+      this.unlockable.set(this.claim(unlockable), unlockable);
+    }
+    return this;
+  }
+
+  private claim(tool: AgentTool): string {
     const name = tool.definition.function.name.trim();
     if (!name) throw new Error('Agent tools must have a non-empty name');
     if (name === SUBMIT_RESULT_TOOL_NAME) {
       throw new Error(`Agent tool name "${SUBMIT_RESULT_TOOL_NAME}" is reserved`);
     }
-    if (this.tools.has(name)) throw new Error(`Agent tool "${name}" is already registered`);
-    this.tools.set(name, tool);
-    return this;
+    if (this.tools.has(name) || this.unlockable.has(name)) {
+      throw new Error(`Agent tool "${name}" is already registered`);
+    }
+    return name;
   }
 
   addReviewer(reviewer: Reviewer): this {
@@ -208,9 +222,23 @@ export class Agent {
     return this;
   }
 
-  /** Tool definitions the model is offered, in registration order. */
+  /** The held tools plus those `messages` unlocked, held first, unlocked in the order unlocked. */
+  private turnTools(messages: readonly ChatMessage[]): ReadonlyMap<string, AgentTool> {
+    if (!this.unlockable.size) return this.tools;
+    const tools = new Map(this.tools);
+    for (const holder of this.tools.values()) {
+      for (const tool of holder.unlocks?.unlocked(messages) ?? []) {
+        const name = tool.definition.function.name.trim();
+        // Only what was registered: an unlock cannot reach a tool never checked.
+        if (this.unlockable.get(name) === tool) tools.set(name, tool);
+      }
+    }
+    return tools;
+  }
+
+  /** Every tool the model can be offered: those held from the start, then those they can unlock. */
   get toolDefinitions(): FunctionToolDefinition[] {
-    return [...this.tools.values()].map((tool) => tool.definition);
+    return [...this.tools.values(), ...this.unlockable.values()].map((tool) => tool.definition);
   }
 
   /** One prompt in, one answer out. */
@@ -295,6 +323,7 @@ export class Agent {
             approve: options.approve,
             schema: options.schema,
             committed: false,
+            tools: this.tools,
             shown: new Set(),
           };
           // Each attempt works on its own copy, so a failed trajectory never
@@ -374,7 +403,6 @@ export class Agent {
           },
         }
       : undefined;
-    const toolDefs = [...this.toolDefinitions, ...(submitDefinition ? [submitDefinition] : [])];
     const route = { provider: client.providerName, model };
 
     let turn = 0;
@@ -400,6 +428,11 @@ export class Agent {
         });
       }
       emit({ type: 'turn_start', turn, route });
+      attempt.tools = this.turnTools(messages);
+      const toolDefs = [
+        ...[...attempt.tools.values()].map((tool) => tool.definition),
+        ...(submitDefinition ? [submitDefinition] : []),
+      ];
 
       let msg: ChatMessage;
       try {
@@ -486,7 +519,7 @@ export class Agent {
             continue;
           }
 
-          const kind = this.tools.get(call.name)?.kind;
+          const kind = attempt.tools.get(call.name)?.kind;
           // Unknown tools fail fast; they go the sequential way like a write.
           if (kind && kind !== 'write') {
             const output = this.runToolCall(call, attempt);
@@ -509,7 +542,7 @@ export class Agent {
         // A display call's `done` ends the reply, but only when the turn
         // holds nothing else: a read's result is still the model's to read.
         const done =
-          msg.toolCalls.every((call) => this.tools.get(call.name)?.kind === 'display') &&
+          msg.toolCalls.every((call) => attempt.tools.get(call.name)?.kind === 'display') &&
           results.some((r) => r.done);
         if (done && !schema) {
           const answer = msg.content.trim();
@@ -572,7 +605,7 @@ export class Agent {
       type: 'tool_start',
       id,
       name,
-      kind: this.tools.get(name)?.kind ?? 'unknown',
+      kind: attempt.tools.get(name)?.kind ?? 'unknown',
       args: call.arguments,
     });
     const started = performance.now();
@@ -636,7 +669,7 @@ export class Agent {
 
   private async invokeTool(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
     const { id, name, arguments: rawArgs } = call;
-    const tool = this.tools.get(name);
+    const tool = attempt.tools.get(name);
     if (!tool) return failed(`unknown tool "${name}"`);
 
     return withSpanKind(

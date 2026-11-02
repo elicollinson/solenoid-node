@@ -8,12 +8,14 @@
  * with it.
  *
  * Tools start from the harness's base set (built-ins plus every connected MCP
- * server), lose any the profile excludes and gain any it adds. Tools the app
- * owns, bound to its own data, arrive through `tools`; the harness never
- * imports them.
+ * server), lose any the profile excludes and gain any it adds, held from the
+ * start or in groups opened on demand. Tools the app owns, bound to its own
+ * data, arrive through `tools` and `toolGroups`; the harness never imports
+ * them.
  */
 import { authoredText } from '@elicollinson/solenoid-security';
 import type { AgentTool, ApprovalHandler } from '../core/index.js';
+import { type ToolGroup, toolGroupOpener } from './toolGroups.js';
 
 export interface AgentProfile {
   /** Shown on spans and in logs. Defaults to `solenoid`. */
@@ -28,6 +30,11 @@ export interface AgentProfile {
   tools?: AgentTool[];
   /** Base tools this agent does not get, by name. A name the base set lacks is an error. */
   exclude?: string[];
+  /**
+   * Groups the agent opens when it needs them (./toolGroups.ts). Each starts
+   * closed; to hold one open from the start, pass its tools in `tools`.
+   */
+  toolGroups?: ToolGroup[];
   /** Hold the subagent tools. Children get this profile's tools and prompt. */
   canSpawn?: boolean;
   /** How writes are approved (see SessionOptions). */
@@ -48,15 +55,21 @@ export function defineProfile(profile: AgentProfile): AgentProfile {
   return profile;
 }
 
-/** The base tools less the excluded ones, plus the profile's own. */
+const nameOf = (tool: AgentTool) => tool.definition.function.name;
+
+/**
+ * What the agent holds from the start: the base tools less the excluded ones,
+ * the profile's own, and the opener of its groups. A name clash anywhere,
+ * group tools included, is refused by Agent.addTool when the session opens.
+ */
 export function profileTools(base: readonly AgentTool[], profile: AgentProfile): AgentTool[] {
   const excluded = new Set(profile.exclude);
-  const kept = base.filter((tool) => !excluded.delete(tool.definition.function.name));
+  const kept = base.filter((tool) => !excluded.delete(nameOf(tool)));
   if (excluded.size) {
     throw new Error(
-      `Cannot exclude ${[...excluded].join(', ')}: the base tools are ${base.map((t) => t.definition.function.name).join(', ')}`
+      `Cannot exclude ${[...excluded].join(', ')}: the base tools are ${base.map(nameOf).join(', ')}`
     );
   }
-  // A name clash with a kept tool is refused by Agent.addTool.
-  return [...kept, ...(profile.tools ?? [])];
+  const opener = toolGroupOpener(profile.toolGroups ?? []);
+  return [...kept, ...(profile.tools ?? []), ...(opener ? [opener] : [])];
 }

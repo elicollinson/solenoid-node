@@ -4,26 +4,15 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { authoredText } from '@elicollinson/solenoid-security';
-import { z } from 'zod';
 import { AppSettingsSchema } from '../../src/config/index.js';
-import { type AgentTool, defineTool } from '../../src/core/index.js';
 import {
   type Harness,
   createHarness,
   defineProfile,
   profileTools,
 } from '../../src/harness/index.js';
+import { toolNames as names, readTool as tool } from '../helpers/tools.js';
 
-const tool = (name: string): AgentTool =>
-  defineTool({
-    name,
-    description: `The ${name} tool.`,
-    kind: 'read',
-    schema: z.object({}),
-    execute: () => name,
-  });
-
-const names = (tools: AgentTool[]) => tools.map((t) => t.definition.function.name);
 const base = [tool('read_webpage'), tool('render_chart')];
 
 describe('profileTools', () => {

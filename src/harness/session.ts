@@ -134,7 +134,7 @@ export class Session {
     options.background?.onNews(() => this.notify());
   }
 
-  /** Names of the tools this session's agent holds, in the order it is offered them. */
+  /** Names of every tool this session's agent can call: those it holds, then those in its groups. */
   get toolNames(): string[] {
     return this.agent.toolDefinitions.map((tool) => tool.function.name);
   }

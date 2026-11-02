@@ -12,3 +12,4 @@ export * from './profile.js';
 export * from './prompt.js';
 export * from './session.js';
 export * from './subagents.js';
+export * from './toolGroups.js';

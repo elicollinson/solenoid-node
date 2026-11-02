@@ -14,6 +14,7 @@ import {
   authoredText,
 } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
+import type { ChatMessage } from './providers.js';
 
 export interface FunctionToolDefinition {
   type: 'function';
@@ -97,6 +98,21 @@ export interface AgentTool<S extends z.ZodType = z.ZodType> {
   component?: string;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
+  /** Tools this one makes callable, such as a group opener's groups. */
+  unlocks?: Unlocks;
+}
+
+/**
+ * What a tool can unlock. `tools` is all of it, registered with the agent
+ * that holds the tool and checked like its own; `unlocked` reads which of
+ * them a transcript has unlocked, asked before every model call. Read off the
+ * transcript rather than held, the answer stays right across a
+ * conversation's turns, a cleared one, and a route fallback replaying an
+ * attempt without the call that unlocked them.
+ */
+export interface Unlocks {
+  tools: readonly AgentTool[];
+  unlocked: (messages: readonly ChatMessage[]) => readonly AgentTool[];
 }
 
 export function defineTool<S extends z.ZodType>(config: {

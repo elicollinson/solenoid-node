@@ -130,6 +130,26 @@ const session = harness.createSession(calendarTriage(db));
 
 Each session gets its own agent, so one profile's tools never reach another's sessions. Excluding a tool the base set lacks, or adding one it keeps, fails when the session opens; to replace a base tool, exclude it and add your own. `defineProfile` registers the prompt as authored text, which the injection screen subtracts, so use it only for a prompt written in the app's code, never one with data interpolated into it. A profile not declared that way still works and its prompt is screened. `session.toolNames` lists what a session holds. With `canSpawn`, its subagents get the profile's tools and prompt.
 
+#### Tool groups
+
+Many tool definitions spend a local model's context before it has read the task. A profile can give its agent groups instead, each closed until the model opens it:
+
+```ts
+const calendar = (db: Db) =>
+  defineToolGroup({
+    name: 'calendar',
+    summary: "The person's calendar: events, holds and who is invited.",
+    briefing: 'Events are listed by day. Never cancel an event the person did not name.',
+    tools: calendarTools(db),
+  });
+
+harness.createSession(defineProfile({ name: 'assistant', toolGroups: [calendar(db), reminders(db)] }));
+```
+
+The agent holds one tool for all of them, `open_tool_group(group)`, whose description lists each group by its summary. Opening one answers with the group's briefing and tool list, and its tools are offered from the next turn. A group is open once the transcript holds a completed call that opened it, so it stays open for the rest of the conversation, closes on `/clear`, and is not carried into a route fallback that replays the attempt without that call. To hold a group open from the start, pass its tools in `tools` instead. A group tool whose name is already taken fails when the session opens, and `session.toolNames` lists group tools after the held ones. A subagent can open groups when it is given `open_tool_group`. The summary and briefing are registered as authored text, so write them in code. On a local model, opening a group changes the tool list at the top of the prompt, so the next turn reprocesses the conversation once.
+
+The core knows nothing of groups. Any tool can carry `unlocks: { tools, unlocked(messages) }`: the agent checks every name in `tools` when it is built, and before each model call offers those `unlocked` returns for the transcript so far.
+
 ### Subagents
 
 `harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:
