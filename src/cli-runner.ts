@@ -4,9 +4,10 @@ import { type AGUIEvent, EventType } from '@ag-ui/core';
  *
  * Executes a single prompt and writes the answer to stdout once the agent
  * has given it. Status and errors go to stderr, so stdout stays pipeable.
- * Nobody is present to answer an approval interrupt, so writes are declined
- * unless `--yes` was given. Subagents still running when the agent answers
- * are waited for, and the turns their news starts write answers too.
+ * Standing approval rules answer first; nobody is present to answer the rest,
+ * so those writes are declined unless `--yes` was given. Subagents still
+ * running when the agent answers are waited for, and the turns their news
+ * starts write answers too.
  */
 import { loadSettings } from './config/index.js';
 import {
@@ -46,8 +47,9 @@ export async function runNonInteractive(
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
 
-    // Nobody is here to answer an approval: --yes allows every write, and
-    // otherwise each is declined as unattended.
+    // Standing rules answer first: allow runs, deny never does. Nobody is
+    // here to answer the rest: --yes allows them, and otherwise each is
+    // declined as unattended.
     const session = harness.createSession({
       canSpawn: true,
       approve: options.yes ? () => ({ allow: true }) : declineUnattended,

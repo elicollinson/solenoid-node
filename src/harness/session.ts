@@ -55,11 +55,19 @@ export interface SendOptions {
 
 export interface SessionOptions {
   /**
-   * How writes are approved. By default each one ends the AG-UI run with an
-   * interrupt for the client to answer with `resume`; with nobody there to
-   * answer (an unattended CLI run, a subagent) pass a policy instead.
+   * Who is asked about a write. By default each ask ends the AG-UI run with
+   * an interrupt for the client to answer with `resume`; with nobody there to
+   * answer (an unattended CLI run, a subagent) pass a handler instead, such
+   * as `declineUnattended`.
    */
   approve?: ApprovalHandler;
+  /**
+   * What stands in front of whoever is asked: given that asker (`approve`,
+   * else the interrupt), returns the handler the run uses. Wrap the asker,
+   * never drop it. The harness puts its standing rules here
+   * (./permissions.ts); to change who is asked, set `approve`.
+   */
+  policy?: (ask: ApprovalHandler) => ApprovalHandler;
   /** Called once by `close`, for whatever the session holds (its subagents). */
   onClose?: () => void;
   /** Work running beside the conversation that the model should hear about. */
@@ -132,6 +140,11 @@ export class Session {
     private readonly options: SessionOptions = {}
   ) {
     options.background?.onNews(() => this.notify());
+  }
+
+  /** Names of every tool this session's agent can call: those it holds, then those in its groups. */
+  get toolNames(): string[] {
+    return this.agent.toolDefinitions.map((tool) => tool.function.name);
   }
 
   /** Release what the session holds. Once only. */
@@ -232,11 +245,13 @@ export class Session {
     // Synchronous up to the agent's first await, so a client draws the
     // person's message the moment it calls send.
     encoder.startTurn({ id: crypto.randomUUID(), text, role });
+    const ask: ApprovalHandler =
+      this.options.approve ?? ((request) => this.interrupt(request, encoder));
     try {
       const result = await this.agent.runMessages([...this.transcript, sent], {
         signal,
         onEvent: (event) => encoder.handle(event),
-        approve: this.options.approve ?? ((request) => this.interrupt(request, encoder)),
+        approve: this.options.policy?.(ask) ?? ask,
       });
       this.transcript = kept(result.messages);
       encoder.complete();

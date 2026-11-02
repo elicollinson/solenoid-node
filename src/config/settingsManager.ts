@@ -19,6 +19,7 @@ const KNOWN_SECTIONS: Record<string, { displayName: string; description: string 
   mcp_servers: { displayName: 'MCP Servers', description: 'MCP server connections' },
   keyboard: { displayName: 'Keyboard', description: 'Keyboard shortcut configuration' },
   display: { displayName: 'Display', description: 'Chat display preferences' },
+  approvals: { displayName: 'Approvals', description: 'Standing allow/ask/deny rules for writes' },
 };
 
 /**
@@ -121,7 +122,8 @@ export function updateSection(key: string, yaml: string): ValidationResult {
   try {
     saveSettings(settings);
     clearSettingsCache();
-    return { isValid: true, errors: [], parsedValue: newValue };
+    // The file keeps what was written; the caller gets it as the schema reads it.
+    return { isValid: true, errors: [], parsedValue: result.parsedValue };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to save settings';
     return {
@@ -129,6 +131,15 @@ export function updateSection(key: string, yaml: string): ValidationResult {
       errors: [{ path: '', message }],
     };
   }
+}
+
+/** Save a standing allow for `tool` to `approvals.rules`, checked against the schema first. */
+export function saveApprovalRule(tool: string): ValidationResult {
+  const approvals = (getRawSettings()?.approvals ?? {}) as { rules?: Record<string, unknown> };
+  return updateSection(
+    'approvals',
+    stringifyYaml({ ...approvals, rules: { ...approvals.rules, [tool]: 'allow' } })
+  );
 }
 
 /**
