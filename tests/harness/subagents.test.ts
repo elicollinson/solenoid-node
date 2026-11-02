@@ -32,7 +32,12 @@ const note = defineTool({
 /** Run one of the manager's tools as the parent's model would. */
 function runTool(manager: SubagentManager, name: string, args: Record<string, unknown>) {
   const tool = manager.tools().find((t) => t.definition.function.name === name)!;
-  return tool.execute(args, { signal: new AbortController().signal, commit: () => {} });
+  return tool.execute(args, {
+    signal: new AbortController().signal,
+    offered: new Map(),
+    messages: [],
+    commit: () => {},
+  });
 }
 
 /** A manager whose children answer from the given scripts, one per spawn. */

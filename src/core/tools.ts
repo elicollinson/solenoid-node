@@ -84,6 +84,13 @@ const DONE = z
 export interface ToolContext {
   /** The run's signal: stop when it fires. */
   signal: AbortSignal;
+  /** The tools the model was offered this turn, by name: held, and unlocked so far. */
+  offered: ReadonlyMap<string, AgentTool>;
+  /**
+   * The attempt's transcript, live: it already holds the assistant turn that
+   * made this call, and grows once the turn's calls finish. Read, never keep.
+   */
+  messages: readonly ChatMessage[];
   /**
    * Say this call did something a replay would repeat. A committed attempt
    * is never re-run on another route; writes commit on their own.
@@ -105,7 +112,8 @@ export interface AgentTool<S extends z.ZodType = z.ZodType> {
 /**
  * What a tool can unlock. `tools` is all of it, registered with the agent
  * that holds the tool and checked like its own; `unlocked` reads which of
- * them a transcript has unlocked, asked before every model call. Read off the
+ * them a transcript has unlocked, asked before every model call.
+ * Tools are known by identity, not name (see Agent.addTool). Read off the
  * transcript rather than held, the answer stays right across a
  * conversation's turns, a cleared one, and a route fallback replaying an
  * attempt without the call that unlocked them.

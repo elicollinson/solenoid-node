@@ -193,22 +193,34 @@ export class Agent {
     for (const reviewer of opts.reviewers ?? []) this.addReviewer(reviewer);
   }
 
-  /** Hold `tool`, and register what it can unlock. Every name is checked here, held or not. */
+  /**
+   * Hold `tool`, and register what it can unlock. Every name is checked here,
+   * held or not.
+   *
+   * Names are claimed by identity: the same AgentTool object may be listed
+   * again (unlockable by several holders, or held and unlockable at once) and
+   * is registered, and offered, once. A different object under a name already
+   * registered is refused, as is holding one object twice.
+   */
   addTool(tool: AgentTool): this {
-    this.tools.set(this.claim(tool), tool);
+    const name = this.claim(tool);
+    if (this.tools.has(name)) throw new Error(`Agent tool "${name}" is already registered`);
+    this.tools.set(name, tool);
     for (const unlockable of tool.unlocks?.tools ?? []) {
       this.unlockable.set(this.claim(unlockable), unlockable);
     }
     return this;
   }
 
+  /** `tool`'s name, once checked: a name registered to a different tool is refused. */
   private claim(tool: AgentTool): string {
     const name = tool.definition.function.name.trim();
     if (!name) throw new Error('Agent tools must have a non-empty name');
     if (name === SUBMIT_RESULT_TOOL_NAME) {
       throw new Error(`Agent tool name "${SUBMIT_RESULT_TOOL_NAME}" is reserved`);
     }
-    if (this.tools.has(name) || this.unlockable.has(name)) {
+    const registered = this.tools.get(name) ?? this.unlockable.get(name);
+    if (registered && registered !== tool) {
       throw new Error(`Agent tool "${name}" is already registered`);
     }
     return name;
@@ -238,7 +250,9 @@ export class Agent {
 
   /** Every tool the model can be offered: those held from the start, then those they can unlock. */
   get toolDefinitions(): FunctionToolDefinition[] {
-    return [...this.tools.values(), ...this.unlockable.values()].map((tool) => tool.definition);
+    // A tool both held and unlockable is listed once, as held.
+    const all = new Set([...this.tools.values(), ...this.unlockable.values()]);
+    return [...all].map((tool) => tool.definition);
   }
 
   /** One prompt in, one answer out. */
@@ -522,14 +536,14 @@ export class Agent {
           const kind = attempt.tools.get(call.name)?.kind;
           // Unknown tools fail fast; they go the sequential way like a write.
           if (kind && kind !== 'write') {
-            const output = this.runToolCall(call, attempt);
+            const output = this.runToolCall(call, attempt, messages);
             reads.push(output);
             outputs.push(output);
             continue;
           }
           await Promise.all(reads);
           reads = [];
-          const output = await this.runToolCall(call, attempt);
+          const output = await this.runToolCall(call, attempt, messages);
           outputs.push(Promise.resolve(output));
         }
 
@@ -599,7 +613,11 @@ export class Agent {
   }
 
   /** Run one tool call, reporting its start and end. Resolves to its outcome. */
-  private async runToolCall(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
+  private async runToolCall(
+    call: ToolCall,
+    attempt: Attempt,
+    messages: readonly ChatMessage[]
+  ): Promise<ToolOutcome> {
     const { id, name } = call;
     attempt.emit({
       type: 'tool_start',
@@ -609,7 +627,7 @@ export class Agent {
       args: call.arguments,
     });
     const started = performance.now();
-    const result = await this.invokeTool(call, attempt);
+    const result = await this.invokeTool(call, attempt, messages);
     const durationMs = Math.round(performance.now() - started);
     // A failure is logged with what was sent: the record a person needs to
     // see why a call keeps failing. Successes stay one short line.
@@ -667,7 +685,11 @@ export class Agent {
     return failed.map(({ name, review }) => `${name} Feedback: ${review.feedback}`).join('\n');
   }
 
-  private async invokeTool(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
+  private async invokeTool(
+    call: ToolCall,
+    attempt: Attempt,
+    messages: readonly ChatMessage[]
+  ): Promise<ToolOutcome> {
     const { id, name, arguments: rawArgs } = call;
     const tool = attempt.tools.get(name);
     if (!tool) return failed(`unknown tool "${name}"`);
@@ -724,6 +746,8 @@ export class Agent {
             Promise.resolve(
               tool.execute(tool.kind === 'display' ? withoutDone(args) : args, {
                 signal: attempt.signal,
+                offered: attempt.tools,
+                messages,
                 commit: () => {
                   attempt.committed = true;
                 },

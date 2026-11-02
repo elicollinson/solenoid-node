@@ -8,6 +8,11 @@
  * Opening one answers with the group's briefing (what it is for, how to use
  * it, the tools it holds) and makes its tools callable from the next turn.
  *
+ * Groups describe tasks, so they overlap: a tool may sit in several, and may
+ * be held from the start too. It is still offered to the model once, and a
+ * briefing describes in full only the tools it adds; the rest it names as
+ * already available. Opening a group again answers in one line.
+ *
  * Which groups are open is read off the transcript: a group is open once the
  * conversation holds a completed call that opened it. Nothing is held, so the
  * answer stays right across the turns of a session, after `clear`, and when a
@@ -37,6 +42,11 @@ export interface ToolGroup {
    * after it. Name acts rather than tools, so it stays true of the group.
    */
   briefing: string;
+  /**
+   * The tools opening the group makes callable. To share a tool between
+   * groups, or with the agent's held tools, pass the same object: tools are
+   * known by identity (see Agent.addTool).
+   */
   tools: readonly AgentTool[];
 }
 
@@ -57,13 +67,26 @@ export function defineToolGroup(group: ToolGroup): ToolGroup {
   return group;
 }
 
-/** What opening a group answers with: its briefing, then its tools. */
-function briefingOf(group: ToolGroup): string {
-  const tools = group.tools.map((tool) => {
-    const { name, description } = tool.definition.function;
-    return `- ${name}: ${description.split('\n')[0]}`;
-  });
-  return `${group.briefing}\n\nTools now available:\n${tools.join('\n')}`;
+const nameOf = (tool: AgentTool) => tool.definition.function.name;
+const names = (tools: readonly AgentTool[]) => tools.map(nameOf).join(', ');
+
+/**
+ * What opening a group answers with: its briefing, the tools it adds in
+ * full, and only the names of those already offered.
+ */
+function briefingOf(group: ToolGroup, offered: ReadonlyMap<string, AgentTool>): string {
+  const added: AgentTool[] = [];
+  const had: AgentTool[] = [];
+  for (const tool of group.tools) (offered.has(nameOf(tool)) ? had : added).push(tool);
+  const parts = [group.briefing];
+  if (added.length) {
+    const lines = added.map(
+      (tool) => `- ${nameOf(tool)}: ${tool.definition.function.description.split('\n')[0]}`
+    );
+    parts.push(`Tools now available:\n${lines.join('\n')}`);
+  }
+  if (had.length) parts.push(`Already available: ${names(had)}.`);
+  return parts.join('\n\n');
 }
 
 /** The groups a transcript has opened, in the order it opened them. */
@@ -95,8 +118,16 @@ export function toolGroupOpener(groups: readonly ToolGroup[]): AgentTool | undef
     schema: z.object({
       group: z.enum([...byName.keys()] as [string, ...string[]]).describe('The group to open'),
     }),
-    execute: ({ group }) => briefingOf(byName.get(group)!),
+    execute: ({ group: name }, { offered, messages }) => {
+      const group = byName.get(name)!;
+      // Opened before: its briefing is already in the conversation.
+      if (openedIn(messages, byName).includes(group)) {
+        return `The ${name} group is already open. Its tools: ${names(group.tools)}.`;
+      }
+      return briefingOf(group, offered);
+    },
   });
+  // A tool shared by groups appears more than once here; the agent registers it once.
   const unlocks: Unlocks = {
     tools: groups.flatMap((group) => group.tools),
     unlocked: (messages) => openedIn(messages, byName).flatMap((group) => group.tools),

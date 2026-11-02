@@ -71,7 +71,7 @@ describe('toolGroupOpener', () => {
   test('opening answers with the briefing and the tools it unlocks', async () => {
     const answer = await opener.execute(
       { group: 'calendar' },
-      { signal: new AbortController().signal, commit: () => {} }
+      { signal: new AbortController().signal, offered: new Map(), messages: [], commit: () => {} }
     );
     expect(answer).toContain(calendar.briefing);
     expect(answer).toContain('- calendar_list: The calendar_list tool.');
@@ -142,6 +142,88 @@ describe('an agent holding the opener', () => {
 
     expect(result.messages.find((m) => m.toolName === 'calendar_list')?.content).toContain(
       'unknown tool "calendar_list"'
+    );
+  });
+});
+
+describe('groups that share tools', () => {
+  // One tool object, in two task-shaped groups.
+  const lookupContact = tool('lookup_contact');
+  const scheduling = defineToolGroup({
+    name: 'scheduling',
+    summary: 'Arranging meetings: finding times and inviting people.',
+    briefing: 'Find a free time before you invite anyone.',
+    tools: [tool('find_time'), lookupContact],
+  });
+  const messaging = defineToolGroup({
+    name: 'messaging',
+    summary: 'Reading and drafting messages to people.',
+    briefing: 'Draft; never send without the person saying so.',
+    tools: [tool('draft_message'), lookupContact],
+  });
+  const groups = { toolGroups: [scheduling, messaging] };
+  const callable = (agent: Agent) => agent.toolDefinitions.map((d) => d.function.name);
+
+  test('the same tool in two groups is registered once', () => {
+    const { agent } = agentWith(profileTools([], groups), []);
+    expect(callable(agent)).toEqual([
+      OPEN_TOOL_GROUP,
+      'find_time',
+      'lookup_contact',
+      'draft_message',
+    ]);
+  });
+
+  test('the same tool held and in a group is registered once, as held', () => {
+    const { agent } = agentWith(profileTools([lookupContact], groups), []);
+    expect(callable(agent)).toEqual([
+      'lookup_contact',
+      OPEN_TOOL_GROUP,
+      'find_time',
+      'draft_message',
+    ]);
+  });
+
+  test('a different tool under a name already registered is still refused', () => {
+    const clash = defineToolGroup({ ...messaging, name: 'clash', tools: [tool('lookup_contact')] });
+    expect(() => agentWith(profileTools([], { toolGroups: [scheduling, clash] }), [])).toThrow(
+      'Agent tool "lookup_contact" is already registered'
+    );
+  });
+
+  test('opening both offers the shared tool once; the second briefing only names it', async () => {
+    const { agent, provider } = agentWith(profileTools([], groups), [
+      call(OPEN_TOOL_GROUP, { group: 'scheduling' }, 'o1'),
+      call(OPEN_TOOL_GROUP, { group: 'messaging' }, 'o2'),
+      say('Ready.'),
+    ]);
+
+    const { messages } = await ask(agent);
+
+    expect(provider.offered[2]).toEqual([
+      OPEN_TOOL_GROUP,
+      'find_time',
+      'lookup_contact',
+      'draft_message',
+    ]);
+    const second = messages.find((m) => m.toolCallId === 'o2')?.content ?? '';
+    expect(second).toContain(messaging.briefing);
+    expect(second).toContain('- draft_message: The draft_message tool.');
+    expect(second).not.toContain('- lookup_contact');
+    expect(second).toContain('Already available: lookup_contact.');
+  });
+
+  test('opening a group again answers in one line, without the briefing', async () => {
+    const { agent } = agentWith(profileTools([], groups), [
+      call(OPEN_TOOL_GROUP, { group: 'scheduling' }, 'o1'),
+      call(OPEN_TOOL_GROUP, { group: 'scheduling' }, 'o2'),
+      say('Ready.'),
+    ]);
+
+    const { messages } = await ask(agent);
+
+    expect(messages.find((m) => m.toolCallId === 'o2')?.content).toBe(
+      'The scheduling group is already open. Its tools: find_time, lookup_contact.'
     );
   });
 });
