@@ -8,6 +8,7 @@ import { Box, Text, useInput } from 'ink';
  * per-agent model overrides. Closes on Enter or Escape key press.
  */
 import { useState } from 'react';
+import type { AppSettings } from '../../config/schema.js';
 import {
   type SectionInfo,
   getAllSections,
@@ -19,6 +20,8 @@ import type { ValidationResult } from '../../config/validator.js';
 
 interface SettingsScreenProps {
   onClose: () => void;
+  /** The approval rules were saved: they apply at once, unlike other settings. */
+  onApprovalsSaved?: (rules: AppSettings['approvals']['rules']) => void;
 }
 
 interface EditorLine {
@@ -48,7 +51,7 @@ function linesToYaml(lines: EditorLine[]): string {
 /** Editor lines shown at once, centred on the current one. */
 const MAX_VISIBLE_LINES = 12;
 
-export function SettingsScreen({ onClose }: SettingsScreenProps) {
+export function SettingsScreen({ onClose, onApprovalsSaved }: SettingsScreenProps) {
   const [sections] = useState<SectionInfo[]>(() => getAllSections());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('selection');
@@ -88,6 +91,9 @@ export function SettingsScreen({ onClose }: SettingsScreenProps) {
     if (result.isValid) {
       setMessage({ text: 'Saved successfully', type: 'success' });
       setValidationResult(null);
+      if (editingSection === 'approvals') {
+        onApprovalsSaved?.((result.parsedValue as AppSettings['approvals']).rules);
+      }
     } else {
       setMessage({ text: result.errors[0]?.message || 'Validation failed', type: 'error' });
       setValidationResult(result);

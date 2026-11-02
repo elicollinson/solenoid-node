@@ -154,7 +154,7 @@ The core knows nothing of groups. Any tool can carry `unlocks: { tools, unlocked
 
 #### Read-only agents
 
-`readOnly: true` gives a profile no write tool at all: base, its own and group tools alike. Use it for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. Briefings list only the tools left, and a group left with none is dropped, so write a group's briefing about acts rather than naming write tools.
+`readOnly: true` gives a profile no write tool at all: base, its own and group tools alike. Use it for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. This also covers anything a held tool can unlock. Briefings list only the tools left, and a group left with none is dropped, so write a group's briefing about acts rather than naming write tools. As a second guard, any write that still reached the agent is denied when it is called.
 
 ### Approval rules
 
@@ -168,7 +168,9 @@ approvals:
     "*": deny                    # everything else
 ```
 
-A rule is keyed by a tool's name, its capability (its name up to the first `_` or `-`, then `.write`, the way Solenoid-Assistant names them) or `*`, and is `allow`, `ask` or `deny`. A deny anywhere wins. Otherwise the most specific key decides, and with no rule the person is asked. A profile can carry `permissions` of its own, checked together with these. In the terminal, answering `a` to an approval allows that tool from then on (`harness.allowAlways`) and saves the rule. The one-shot CLI and subagents follow the same rules; what is left at ask is declined there, since nobody can answer (or allowed, with `--yes`). The core only asks. An app with its own store of rules passes its own `approve`, which answers whatever the harness's rules leave at ask; the rules always answer first, so for full control run with none.
+A rule is keyed by a tool's name, its capability or `*`, and is `allow`, `ask` or `deny`. A capability is a tool's name up to the first `_` (or, with none, the first `-`), then `.write`: `calendar_create` → `calendar.write`, and an MCP tool `google-calendar_create_event` → `google-calendar.write`, so name MCP servers with `-` rather than `_`. Within one set of rules the most specific key decides, so the example denies everything except calendar writes and `notion-create-pages`. With no rule the person is asked.
+
+A profile can carry `permissions` of its own. Its deny is a hard limit, and so is yours; otherwise your rule decides, then the profile's. In the terminal, answering `a` to an approval allows that tool from then on (`harness.allowAlways`) and saves the rule. The one-shot CLI and subagents follow the same rules; what is left at ask is declined there, since nobody can answer (or allowed, with `--yes`). The core only asks. An app with its own store of rules passes its own `approve`, which answers whatever the harness's rules leave at ask; the rules always answer first, so for full control run with none.
 
 ### Subagents
 

@@ -127,8 +127,8 @@ export const ApprovalsConfigSchema = z
   .object({
     /**
      * Standing answers for write tools, keyed by tool name (`calendar_create`),
-     * capability (`calendar.write`) or `*`. Deny anywhere wins; otherwise the
-     * most specific key decides, and with none the person is asked.
+     * capability (`calendar.write`) or `*`. The most specific key decides,
+     * and with none the person is asked (src/harness/permissions.ts).
      */
     rules: z.record(z.string().min(1), z.enum(PERMISSION_MODES)).default({}),
   })

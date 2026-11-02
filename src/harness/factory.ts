@@ -35,7 +35,7 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
-import { resolvePermission, withPermissions } from './permissions.js';
+import { type PermissionRules, resolvePermission, withPermissions } from './permissions.js';
 import { type AgentProfile, profileTools } from './profile.js';
 import {
   DEFAULT_SYSTEM_PROMPT,
@@ -172,6 +172,11 @@ export interface Harness {
    * failed, and the rule holds only until the process ends.
    */
   allowAlways(tool: string): string | undefined;
+  /**
+   * Replace the person's standing rules with `rules`, live for every session
+   * at its next write: for the settings screen, once it has saved them.
+   */
+  setApprovalRules(rules: PermissionRules): void;
   close(): Promise<void>;
 }
 
@@ -211,16 +216,24 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
 
   // Every open session, so closing the harness closes them and their subagents.
   const sessions = new Set<Session>();
-  // The person's standing rules, live: allowAlways adds to them in place.
-  const rules = settings.approvals.rules;
+  // The person's standing rules live in `settings.approvals.rules`, which
+  // allowAlways and setApprovalRules replace, so `settings` stays true.
   const createSession: Harness['createSession'] = (profile = {}) => {
     const name = profile.name ?? 'solenoid';
     const agentTools = profileTools(tools, profile);
     const prompt = profile.systemPrompt ?? systemPrompt;
     // The rules answer first, before any asker, and are read at each write,
-    // so a rule added while the session runs applies to its next one.
+    // so a rule changed while the session runs applies to its next one.
     const policy = (ask: ApprovalHandler) =>
-      withPermissions((tool) => resolvePermission([rules, profile.permissions ?? {}], tool), ask);
+      withPermissions(
+        // Read-only is enforced here too, where every write passes, not only
+        // by keeping write tools out of sight.
+        (tool) =>
+          profile.readOnly
+            ? 'deny'
+            : resolvePermission(settings.approvals.rules, profile.permissions ?? {}, tool),
+        ask
+      );
     const manager = profile.canSpawn
       ? new SubagentManager({
           tools: agentTools,
@@ -265,12 +278,23 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     warnings: [
       ...skipped,
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),
+      // Its tools are `<server>_<tool>`, so its capability would end at the
+      // server name's own `_` (see capabilityFor).
+      ...Object.keys(settings.mcp_servers)
+        .filter((name) => name.includes('_'))
+        .map(
+          (name) =>
+            `MCP server ${name}: approval rules on ${name}.write will not match its tools; rename it with - instead of _.`
+        ),
     ],
     createSession,
     allowAlways: (tool) => {
-      rules[tool] = 'allow';
+      settings.approvals.rules = { ...settings.approvals.rules, [tool]: 'allow' };
       const saved = saveApprovalRule(tool);
       return saved.isValid ? undefined : saved.errors.map((e) => e.message).join('; ');
+    },
+    setApprovalRules: (rules) => {
+      settings.approvals.rules = rules;
     },
     close: async () => {
       for (const session of sessions) session.close();

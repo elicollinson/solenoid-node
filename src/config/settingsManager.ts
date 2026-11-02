@@ -122,7 +122,8 @@ export function updateSection(key: string, yaml: string): ValidationResult {
   try {
     saveSettings(settings);
     clearSettingsCache();
-    return { isValid: true, errors: [], parsedValue: newValue };
+    // The file keeps what was written; the caller gets it as the schema reads it.
+    return { isValid: true, errors: [], parsedValue: result.parsedValue };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to save settings';
     return {

@@ -47,7 +47,8 @@ export interface AgentProfile {
   canSpawn?: boolean;
   /**
    * Standing rules for this agent's writes (./permissions.ts), checked
-   * together with the person's from settings: a deny in either wins.
+   * together with the person's from settings. A deny in either is final;
+   * otherwise the person's rule decides, then these.
    */
   permissions?: PermissionRules;
   /**
@@ -89,12 +90,24 @@ export function profileTools(base: readonly AgentTool[], profile: AgentProfile):
     );
   }
   const allowed = (tools: readonly AgentTool[]) =>
-    profile.readOnly ? tools.filter((tool) => tool.kind !== 'write') : tools;
-  const groups = profile.readOnly
-    ? (profile.toolGroups ?? [])
-        .map((group) => ({ ...group, tools: allowed(group.tools) }))
-        .filter((group) => group.tools.length)
-    : (profile.toolGroups ?? []);
+    profile.readOnly ? tools.filter((tool) => tool.kind !== 'write') : [...tools];
+  // Filtered before the opener is built, so its description and briefings
+  // never name a write tool.
+  const groups = (profile.toolGroups ?? [])
+    .map((group) => ({ ...group, tools: allowed(group.tools) }))
+    .filter((group) => group.tools.length);
   const opener = toolGroupOpener(groups);
-  return [...allowed(kept), ...allowed(profile.tools ?? []), ...(opener ? [opener] : [])];
+  const held = [...allowed(kept), ...allowed(profile.tools ?? []), ...(opener ? [opener] : [])];
+  // Read-only reaches whatever a held tool can unlock, not only groups.
+  return held.map((tool) => {
+    const { unlocks } = tool;
+    if (!profile.readOnly || !unlocks) return tool;
+    return {
+      ...tool,
+      unlocks: {
+        tools: allowed(unlocks.tools),
+        unlocked: (messages) => allowed(unlocks.unlocked(messages)),
+      },
+    };
+  });
 }

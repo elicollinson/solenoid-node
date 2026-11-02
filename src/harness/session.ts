@@ -55,15 +55,17 @@ export interface SendOptions {
 
 export interface SessionOptions {
   /**
-   * How writes are approved. By default each one ends the AG-UI run with an
-   * interrupt for the client to answer with `resume`; with nobody there to
-   * answer (an unattended CLI run, a subagent) pass a policy instead.
+   * Who is asked about a write. By default each ask ends the AG-UI run with
+   * an interrupt for the client to answer with `resume`; with nobody there to
+   * answer (an unattended CLI run, a subagent) pass a handler instead, such
+   * as `declineUnattended`.
    */
   approve?: ApprovalHandler;
   /**
-   * A policy in front of whoever is asked: given that asker (`approve`, else
-   * the interrupt), returns the handler the run uses. The harness puts its
-   * standing rules here (./permissions.ts).
+   * What stands in front of whoever is asked: given that asker (`approve`,
+   * else the interrupt), returns the handler the run uses. Wrap the asker,
+   * never drop it. The harness puts its standing rules here
+   * (./permissions.ts); to change who is asked, set `approve`.
    */
   policy?: (ask: ApprovalHandler) => ApprovalHandler;
   /** Called once by `close`, for whatever the session holds (its subagents). */

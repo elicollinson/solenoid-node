@@ -30,41 +30,64 @@ const request = (tool: string) =>
   ({ tool, toolCallId: 'c1', signal: new AbortController().signal }) as unknown as ApprovalRequest;
 
 describe('capabilityFor', () => {
-  test('a tool’s family, up to the first separator, then .write', () => {
+  test('a tool’s family, to the first _, else the first -, then .write', () => {
     expect(capabilityFor('calendar_create')).toBe('calendar.write');
     expect(capabilityFor('notion-create-pages')).toBe('notion.write');
     expect(capabilityFor('spend')).toBe('spend.write');
+  });
+
+  test('an MCP tool’s family is its whole server name', () => {
+    expect(capabilityFor('google-calendar_create_event')).toBe('google-calendar.write');
+    expect(capabilityFor('google-drive_upload')).toBe('google-drive.write');
   });
 });
 
 describe('resolvePermission', () => {
   test('with no rule, ask', () => {
-    expect(resolvePermission([], 'calendar_create')).toBe('ask');
+    expect(resolvePermission({}, {}, 'calendar_create')).toBe('ask');
   });
 
-  test('the most specific key decides: tool, then capability, then *', () => {
-    const rules = { '*': 'deny', 'calendar.write': 'ask', calendar_create: 'allow' } as const;
-    // * deny would win; leave it out to see specificity.
-    const { '*': _, ...noDeny } = rules;
-    expect(resolvePermission([noDeny], 'calendar_create')).toBe('allow');
-    expect(resolvePermission([noDeny], 'calendar_cancel')).toBe('ask');
-    expect(resolvePermission([{ '*': 'allow' }], 'notion-create-pages')).toBe('allow');
-  });
-
-  test('a deny anywhere wins, on any key and in any rule set', () => {
-    expect(resolvePermission([{ calendar_create: 'allow', '*': 'deny' }], 'calendar_create')).toBe(
-      'deny'
-    );
+  test('within one set the most specific key decides: tool, then capability, then *', () => {
+    // The README's example.
+    const mine = {
+      'calendar.write': 'allow',
+      'notion-create-pages': 'ask',
+      '*': 'deny',
+    } as const;
+    expect(resolvePermission(mine, {}, 'calendar_create')).toBe('allow');
+    expect(resolvePermission(mine, {}, 'notion-create-pages')).toBe('ask');
+    expect(resolvePermission(mine, {}, 'email_send')).toBe('deny');
     expect(
       resolvePermission(
-        [{ calendar_create: 'allow' }, { 'calendar.write': 'deny' }],
+        { 'calendar.write': 'ask', calendar_create: 'allow' },
+        {},
+        'calendar_create'
+      )
+    ).toBe('allow');
+  });
+
+  test('a deny from either side is final', () => {
+    expect(
+      resolvePermission(
+        { calendar_create: 'allow' },
+        { 'calendar.write': 'deny' },
+        'calendar_create'
+      )
+    ).toBe('deny');
+    expect(
+      resolvePermission(
+        { 'calendar.write': 'deny' },
+        { calendar_create: 'allow' },
         'calendar_create'
       )
     ).toBe('deny');
   });
 
-  test('two rule sets on one key: the stricter', () => {
-    expect(resolvePermission([{ x_y: 'allow' }, { x_y: 'ask' }], 'x_y')).toBe('ask');
+  test('past a deny, the person’s rule decides, then the agent’s', () => {
+    // An always-allow is not undone by the agent's ask.
+    expect(resolvePermission({ x_y: 'allow' }, { x_y: 'ask' }, 'x_y')).toBe('allow');
+    expect(resolvePermission({ x_y: 'ask' }, { x_y: 'allow' }, 'x_y')).toBe('ask');
+    expect(resolvePermission({}, { 'x.write': 'allow' }, 'x_y')).toBe('allow');
   });
 });
 
@@ -75,7 +98,7 @@ describe('withPermissions', () => {
     return { allow: true } as const;
   };
   const approve = withPermissions(
-    (tool) => resolvePermission([{ a_x: 'allow', d_x: 'deny' }], tool),
+    (tool) => resolvePermission({ a_x: 'allow', d_x: 'deny' }, {}, tool),
     ask
   );
 
@@ -149,6 +172,18 @@ describe('a read-only profile', () => {
     // The group left with no tools is gone from the opener altogether.
     expect(names(opener.unlocks!.tools)).toEqual(['inbox_list']);
     expect(opener.definition.function.description).not.toContain('outbox');
+  });
+
+  test('reaches what any held tool can unlock, not only groups', () => {
+    const send = writeTool('gmail_send');
+    const draft = readTool('gmail_draft_view');
+    const unlocker: AgentTool = {
+      ...readTool('gmail_open'),
+      unlocks: { tools: [draft, send], unlocked: () => [draft, send] },
+    };
+    const [held] = profileTools([], { readOnly: true, tools: [unlocker] });
+    expect(names(held!.unlocks!.tools)).toEqual(['gmail_draft_view']);
+    expect(names(held!.unlocks!.unlocked([]))).toEqual(['gmail_draft_view']);
   });
 
   test('a read-only profile with nothing left to open holds no opener', () => {

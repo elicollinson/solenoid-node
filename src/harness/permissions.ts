@@ -15,10 +15,14 @@
  *          or nobody (declined).
  *   deny   it never runs, and the model is told so.
  *
- * Deny anywhere wins, whichever key or rule set it is on: a capability denied
- * by the app is not reopened by one tool the person allowed. Otherwise the
- * most specific key decides (tool, then capability, then `*`), ask over allow
- * on a tie, and with no rule at all the answer is ask.
+ * Within one set of rules the most specific key decides: tool, then
+ * capability, then `*`. So `*: deny` with `calendar.write: allow` denies
+ * everything but calendar writes.
+ *
+ * Two sets meet at every write: the person's (settings) and the agent's (the
+ * profile). The agent's deny is a hard limit, and so is the person's; past
+ * that the person's own rule decides, since it is their choice to be asked or
+ * not, then the agent's. With no rule in either, the answer is ask.
  */
 import type { PERMISSION_MODES } from '../config/index.js';
 import type { ApprovalHandler } from '../core/index.js';
@@ -28,25 +32,42 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export type PermissionRules = Readonly<Record<string, PermissionMode>>;
 
 /**
- * A write tool's capability: its family, up to the first `_` or `-`, then
- * `.write`. `calendar_create` → `calendar.write`, `notion-create-pages` →
- * `notion.write`. Solenoid-Assistant names capabilities the same way, so a
- * rule written for one reads the same in the other.
+ * A write tool's capability: its family, then `.write`. The family runs to
+ * the first `_`, or failing one to the first `-`:
+ *
+ *   calendar_create              → calendar.write
+ *   google-calendar_create_event → google-calendar.write (an MCP tool:
+ *                                  `<server>_<tool>`, so the server)
+ *   notion-create-pages          → notion.write
+ *
+ * Solenoid-Assistant names its own tools and MCP tools the same way, so a
+ * rule written for one reads the same in the other. An MCP server whose name
+ * holds a `_` splits early; name servers with `-`.
  */
 export function capabilityFor(tool: string): string {
-  const cut = tool.search(/[_-]/);
+  const underscore = tool.indexOf('_');
+  const cut = underscore > 0 ? underscore : tool.indexOf('-');
   return `${cut > 0 ? tool.slice(0, cut) : tool}.write`;
 }
 
-/** What `rules` say about `tool` (see the top of this file). */
-export function resolvePermission(rules: readonly PermissionRules[], tool: string): PermissionMode {
-  const perKey = [tool, capabilityFor(tool), '*'].map((key) =>
-    rules.flatMap((set) => (Object.hasOwn(set, key) ? [set[key] as PermissionMode] : []))
-  );
-  if (perKey.some((modes) => modes.includes('deny'))) return 'deny';
-  const decided = perKey.find((modes) => modes.length);
-  if (!decided) return 'ask';
-  return decided.includes('ask') ? 'ask' : 'allow';
+/** What one set of rules says about `tool`: its most specific key's mode, if any. */
+export function ruleFor(rules: PermissionRules, tool: string): PermissionMode | undefined {
+  for (const key of [tool, capabilityFor(tool), '*']) {
+    if (Object.hasOwn(rules, key)) return rules[key];
+  }
+  return undefined;
+}
+
+/** The person's and the agent's rules together (see the top of this file). */
+export function resolvePermission(
+  person: PermissionRules,
+  agent: PermissionRules,
+  tool: string
+): PermissionMode {
+  const mine = ruleFor(person, tool);
+  const its = ruleFor(agent, tool);
+  if (mine === 'deny' || its === 'deny') return 'deny';
+  return mine ?? its ?? 'ask';
 }
 
 /** Put standing rules in front of `ask`: allow and deny are answered here, ask goes on. */

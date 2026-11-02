@@ -274,7 +274,13 @@ function AppContent() {
   };
 
   if (screen === 'settings') {
-    return <SettingsScreen onClose={() => setScreen('chat')} />;
+    return (
+      <SettingsScreen
+        onClose={() => setScreen('chat')}
+        // Removing an allow takes effect now, not at the next start.
+        onApprovalsSaved={harness.setApprovalRules}
+      />
+    );
   }
   if (screen === 'help') {
     return <HelpScreen onClose={() => setScreen('chat')} />;
