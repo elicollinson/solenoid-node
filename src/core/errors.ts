@@ -15,7 +15,8 @@ export class ProviderStalledError extends Error {
 
   constructor(
     readonly phase: 'first_byte' | 'idle',
-    readonly waitedMs: number
+    readonly waitedMs: number,
+    readonly provider?: string
   ) {
     super(
       phase === 'first_byte'

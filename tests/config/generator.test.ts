@@ -183,6 +183,15 @@ describe('Config Generator', () => {
       expect(settings.search.brave_search_api_key).toBe('injected-value');
     });
 
+    it('refuses a path that would write to a prototype', () => {
+      expect(() =>
+        generateSettings({
+          additionalEnvVars: { BAD: { settingsPath: ['search', '__proto__', 'x'], value: 'y' } },
+        })
+      ).toThrow('Settings key "__proto__" would write to a prototype');
+      expect(({} as Record<string, unknown>).x).toBeUndefined();
+    });
+
     it('should use onlySetEnvVars mode', () => {
       process.env['BRAVE_SEARCH_API_KEY'] = 'only-this';
 

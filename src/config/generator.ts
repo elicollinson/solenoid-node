@@ -77,20 +77,16 @@ const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
  * Set a nested value in an object using a path array
  */
 function setNestedValue(obj: Record<string, unknown>, path: string[], value: unknown): void {
-  if (path.length === 0) return;
-  const unsafe = path.find((key) => UNSAFE_KEYS.has(key));
-  if (unsafe) throw new Error(`Settings path ${path.join('.')} contains "${unsafe}"`);
-
-  let current = obj;
-  for (let i = 0; i < path.length - 1; i++) {
-    const key = path[i]!;
-    if (!Object.hasOwn(current, key) || typeof current[key] !== 'object' || current[key] === null) {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
+  const [key, ...rest] = path;
+  if (key === undefined) return;
+  if (UNSAFE_KEYS.has(key)) throw new Error(`Settings key "${key}" would write to a prototype`);
+  if (rest.length === 0) {
+    obj[key] = value;
+    return;
   }
-  const finalKey = path[path.length - 1]!;
-  current[finalKey] = value;
+  const child = Object.hasOwn(obj, key) ? obj[key] : undefined;
+  if (typeof child !== 'object' || child === null) obj[key] = {};
+  setNestedValue(obj[key] as Record<string, unknown>, rest, value);
 }
 
 /**
