@@ -9,3 +9,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # Dependency fixes arrive as PRs instead of as a red security check.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      dependencies:
+        patterns: ["*"]

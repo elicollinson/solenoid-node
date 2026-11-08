@@ -6,6 +6,8 @@ on:
       - dev
       - main
 
+permissions: {}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -14,27 +16,27 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
+      # No cache: a release build must not restore anything another run wrote.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
+          no-cache: true
 
       - name: Install dependencies
-        run: bun install
-
-      - name: Install npm for publishing
-        run: bun add -D npm@latest
+        run: bun install --frozen-lockfile
 
       - name: Determine publish type
         id: publish_type
         run: |
-          if [[ "${{ github.ref_name }}" == "dev" ]]; then
-            echo "type=dev" >> $GITHUB_OUTPUT
+          if [[ "$GITHUB_REF_NAME" == "dev" ]]; then
+            echo "type=dev" >> "$GITHUB_OUTPUT"
           else
-            echo "type=release" >> $GITHUB_OUTPUT
+            echo "type=release" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set dev version
@@ -44,14 +46,10 @@ jobs:
           CURRENT=$(node -p "require('./package.json').version")
           # Create prerelease version: 2.0.0 -> 2.0.0-dev.2025052314
           DEV_VERSION="${CURRENT%%-*}-dev.$(date +%Y%m%d%H%M%S)"
-          echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
           echo "Dev version: $DEV_VERSION"
           # Update package.json
           node -e "const pkg=require('./package.json');pkg.version='$DEV_VERSION';require('fs').writeFileSync('./package.json',JSON.stringify(pkg,null,2)+'\n')"
-
-      - name: Install standard-version
-        if: steps.publish_type.outputs.type == 'release'
-        run: bun add -D standard-version
 
       - name: Bump version
         if: steps.publish_type.outputs.type == 'release'
@@ -65,28 +63,35 @@ jobs:
           CURRENT=$(node -p "require('./package.json').version")
           echo "Current version: $CURRENT"
 
-          npx standard-version --release-as patch
+          npx --yes standard-version@9.5.0 --release-as patch
 
           NEW=$(node -p "require('./package.json').version")
           echo "New version: $NEW"
-          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
 
+      # The token is given to this step alone, not left in .git/config for
+      # every step after checkout (dependency install scripts included).
       - name: Push version bump
         if: steps.publish_type.outputs.type == 'release'
-        run: git push --follow-tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: git push --follow-tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"
 
       - name: Create GitHub Release
         if: steps.publish_type.outputs.type == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version_release.outputs.version }}
-          name: Release v${{ steps.version_release.outputs.version }}
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version_release.outputs.version }}
+        run: gh release create "v${VERSION}" --title "Release v${VERSION}" --generate-notes --verify-tag
 
+      # npm 11.5+ is needed for trusted publishing; pinned and run through npx so
+      # the job never edits package.json.
       - name: Publish to npm
+        env:
+          PUBLISH_TYPE: ${{ steps.publish_type.outputs.type }}
         run: |
-          if [[ "${{ steps.publish_type.outputs.type }}" == "dev" ]]; then
-            ./node_modules/.bin/npm publish --tag dev --access public --provenance
+          if [[ "$PUBLISH_TYPE" == "dev" ]]; then
+            npx --yes npm@12.2.2 publish --tag dev --access public --provenance
           else
-            ./node_modules/.bin/npm publish --access public --provenance
+            npx --yes npm@12.2.2 publish --access public --provenance
           fi
