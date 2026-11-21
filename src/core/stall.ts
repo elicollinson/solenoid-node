@@ -18,6 +18,8 @@ import { abortReason } from './signals.js';
 export interface StallLimits {
   firstByteMs: number;
   idleMs: number;
+  /** Named on the error, so a hint can point at this provider's limits. */
+  provider?: string;
 }
 
 export function stallGuardedFetch(limits: StallLimits, inner: typeof fetch = fetch): typeof fetch {
@@ -28,7 +30,10 @@ export function stallGuardedFetch(limits: StallLimits, inner: typeof fetch = fet
     const arm = (phase: ProviderStalledError['phase']) => {
       clearTimeout(timer);
       const ms = phase === 'idle' ? limits.idleMs : limits.firstByteMs;
-      timer = setTimeout(() => controller.abort(new ProviderStalledError(phase, ms)), ms);
+      timer = setTimeout(
+        () => controller.abort(new ProviderStalledError(phase, ms, limits.provider)),
+        ms
+      );
     };
     const disarm = () => clearTimeout(timer);
     // Whatever the inner fetch throws once the guard fired, the stall is the cause.

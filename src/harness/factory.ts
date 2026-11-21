@@ -68,7 +68,7 @@ function providerKey(provider: ProviderName, settings: AppSettings): string | un
  */
 function providerFetch(provider: ProviderName, settings: AppSettings): typeof fetch {
   const { first_byte_ms, idle_ms } = settings.providers[provider].stall;
-  return stallGuardedFetch({ firstByteMs: first_byte_ms, idleMs: idle_ms });
+  return stallGuardedFetch({ firstByteMs: first_byte_ms, idleMs: idle_ms, provider });
 }
 
 function missingKeyHint(provider: ProviderName): string {

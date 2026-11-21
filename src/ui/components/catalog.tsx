@@ -19,9 +19,18 @@ const RENDERERS: {
   'solenoid.chart': (content: ChartContent) => <ChartRenderer config={content} />,
 };
 
-function isComponentType(type: string): type is ComponentType {
-  return Object.hasOwn(COMPONENTS, type);
+interface Entry {
+  schema: z.ZodType;
+  render: (content: unknown) => ReactElement;
 }
+
+/** Looked up by a name from the wire, so a Map: no prototype keys to reach. */
+const CATALOG = new Map(
+  (Object.keys(COMPONENTS) as ComponentType[]).map((type): [string, Entry] => [
+    type,
+    { schema: COMPONENTS[type], render: RENDERERS[type] as Entry['render'] },
+  ])
+);
 
 export function ActivityView({
   activityType,
@@ -30,10 +39,11 @@ export function ActivityView({
   activityType: string;
   content: Record<string, unknown>;
 }) {
-  if (!isComponentType(activityType)) {
+  const entry = CATALOG.get(activityType);
+  if (!entry) {
     return <Text dimColor>[{activityType} cannot be shown in the terminal]</Text>;
   }
-  const parsed = COMPONENTS[activityType].safeParse(content);
+  const parsed = entry.schema.safeParse(content);
   if (!parsed.success) {
     return (
       <Box borderStyle="single" borderColor="red" paddingX={1}>
@@ -43,6 +53,5 @@ export function ActivityView({
       </Box>
     );
   }
-  const render = RENDERERS[activityType] as (content: unknown) => ReactElement;
-  return render(parsed.data);
+  return entry.render(parsed.data);
 }

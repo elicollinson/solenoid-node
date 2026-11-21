@@ -59,7 +59,11 @@ export function describeRunError(error: unknown): string {
     return `Stopped: injection screening failed (${detail}). Check the screening model in /settings, or set screening.enabled: false.`;
   }
   if (error instanceof ProviderStalledError) {
-    return `${error.message}, on every route. If the model is only slow, raise providers.<name>.stall in /settings.`;
+    const limit = error.phase === 'idle' ? 'idle_ms' : 'first_byte_ms';
+    const setting = error.provider
+      ? `providers.${error.provider}.stall.${limit}`
+      : `the provider's stall.${limit}`;
+    return `${error.message}, on every route. If the model is only slow, raise ${setting} in /settings.`;
   }
   const message = error instanceof Error ? error.message : String(error);
   if (message === 'terminated') {

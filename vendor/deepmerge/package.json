@@ -1,0 +1,7 @@
+{
+  "name": "deepmerge",
+  "version": "4.3.1-solenoid.0",
+  "description": "Stand-in for deepmerge 4.3.1 (GHSA-gcqx-w48m-w2h4 has no fixed release). Same merge for plain objects and arrays; copies only own keys and never __proto__, constructor or prototype.",
+  "main": "index.js",
+  "license": "MIT"
+}
