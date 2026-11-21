@@ -103,6 +103,71 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
 - **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
 
+### Agent profiles
+
+The CLI's agent is the default profile. An app built on the harness declares its own agents in code: the base tools (built-ins plus every connected MCP server) less any it excludes, plus tools of its own, which it builds bound to its own data and passes in.
+
+```ts
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  createHarness,
+  declineUnattended,
+  defineProfile,
+} from 'solenoid-node';
+
+const calendarTriage = (db: Db) =>
+  defineProfile({
+    name: 'calendar-triage',
+    systemPrompt: `${DEFAULT_SYSTEM_PROMPT}\n\nYou keep the person's calendar tidy.`,
+    tools: calendarTools(db), // the app's own AgentTools
+    exclude: ['render_chart'],
+    approve: declineUnattended, // or the app's own approval policy
+  });
+
+const harness = await createHarness(loadSettings());
+const session = harness.createSession(calendarTriage(db));
+```
+
+Each session gets its own agent, so one profile's tools never reach another's sessions. Excluding a tool the base set lacks, or adding one it keeps, fails when the session opens; to replace a base tool, exclude it and add your own. `defineProfile` registers the prompt as authored text, which the injection screen subtracts, so use it only for a prompt written in the app's code, never one with data interpolated into it. A profile not declared that way still works and its prompt is screened. `session.toolNames` lists what a session holds. With `canSpawn`, its subagents get the profile's tools and prompt.
+
+#### Tool groups
+
+Many tool definitions spend a local model's context before it has read the task. A profile can give its agent groups instead, each closed until the model opens it:
+
+```ts
+const calendar = (db: Db) =>
+  defineToolGroup({
+    name: 'calendar',
+    summary: "The person's calendar: events, holds and who is invited.",
+    briefing: 'Events are listed by day. Never cancel an event the person did not name.',
+    tools: calendarTools(db),
+  });
+
+harness.createSession(defineProfile({ name: 'assistant', toolGroups: [calendar(db), reminders(db)] }));
+```
+
+The agent holds one tool for all of them, `open_tool_group(group)`, whose description lists each group by its summary. Opening one answers with the group's briefing, and its tools are offered from the next turn and stay open for the rest of the conversation. To hold a group open from the start, pass its tools in `tools` instead. Groups describe tasks, so they can share tools: pass the same `AgentTool` object to each and it is offered once (see `Agent.addTool`). Write summaries and briefings in code: they are registered as authored text. On a local model, opening a group reprocesses the conversation once. How it works is in `src/harness/toolGroups.ts`.
+
+#### Read-only agents
+
+`readOnly: true` is for an agent that reads text a stranger wrote (email, web pages, messages), so that text cannot steer it into a change. Its write tools, group ones included, are left out, and any write that still reaches it is denied.
+
+### Approval rules
+
+A write tool asks before it runs. Standing rules answer instead of a person, so the same question is not asked every time:
+
+```yaml
+approvals:
+  rules:
+    calendar.write: allow        # a capability: every calendar_* write
+    notion-create-pages: ask     # one tool
+    "*": deny                    # everything else
+```
+
+A rule is keyed by a tool's name, its capability (`calendar_create` → `calendar.write`; an MCP tool takes its server's name) or `*`. The most specific key decides, so the example denies everything except calendar writes and `notion-create-pages`; with no rule the person is asked. A profile's own `permissions` combine with yours: a deny from either is final, otherwise yours decides. The full rules are in `src/harness/permissions.ts`.
+
+Answering `a` to an approval allows that tool from then on and saves the rule; edits in `/settings` apply at once. The one-shot CLI and subagents follow the same rules, and decline what is left at ask (or allow it, with `--yes`). An app that decides every write itself runs with no rules and passes its own `approve`.
+
 ### Subagents
 
 `harness.createSession({ canSpawn: true })` gives a session's agent these tools; the UI and CLI sessions have them, subagents never do:
@@ -115,7 +180,7 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 | `message_subagent(id, message)` | A follow-up: a running one reads it when its current turn ends, a finished one starts again on it |
 | `cancel_subagent(id)` | Stops one |
 
-Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model's request slots and context are shared. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. Nobody can approve a subagent's write yet, so those are declined as unattended.
+Subagents live in memory and stop when their session closes. Two run at once and the rest queue, since a local model's request slots and context are shared. Spawning commits the parent's attempt, so a route fallback never starts one twice. A subagent's task is sent as `agent` text. A subagent follows its parent's approval rules; nobody can answer the writes they leave at ask, so those are declined as unattended.
 
 The parent orchestrates and never blocks on a child. It spawns subagents, tells the person what is running, and ends its turn, so the person can keep talking to it and it can spawn more at any time. While any subagent runs, the model's copy of every message that opens a parent turn ends with their status. That covers the person's messages and the subagents' own. Those at work are listed with their task, and finished ones go on one line. It goes with the current message only: the thread and the stored transcript keep the words alone.
 

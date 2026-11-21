@@ -12,6 +12,7 @@ import {
   declineUnattended,
 } from '../../src/harness/index.js';
 import { ScriptedProvider, type Step, call, say } from '../helpers/scripted-provider.js';
+import { toolContext } from '../helpers/tools.js';
 
 const echo = defineTool({
   name: 'echo',
@@ -32,7 +33,7 @@ const note = defineTool({
 /** Run one of the manager's tools as the parent's model would. */
 function runTool(manager: SubagentManager, name: string, args: Record<string, unknown>) {
   const tool = manager.tools().find((t) => t.definition.function.name === name)!;
-  return tool.execute(args, { signal: new AbortController().signal, commit: () => {} });
+  return tool.execute(args, toolContext());
 }
 
 /** A manager whose children answer from the given scripts, one per spawn. */

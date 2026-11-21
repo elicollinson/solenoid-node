@@ -2,7 +2,8 @@
  * Approval Prompt Component
  *
  * Shown when the agent wants to run a write tool. The run is paused until
- * the person answers: y/Enter allows the call, n/Esc declines it.
+ * the person answers: y/Enter allows the call, a allows it and every later
+ * call of the tool (a standing rule, saved to settings), n/Esc declines it.
  */
 import { Box, Text, useInput } from 'ink';
 import type { ApprovalRequest } from '../../core/index.js';
@@ -10,9 +11,12 @@ import { safeJson } from '../../core/tracing.js';
 
 export type PendingApproval = Pick<ApprovalRequest, 'tool' | 'description' | 'args'>;
 
+/** Allow this call, allow the tool from now on, or decline. */
+export type ApprovalAnswer = 'allow' | 'always' | 'decline';
+
 interface ApprovalPromptProps {
   approval: PendingApproval;
-  onAnswer: (allow: boolean) => void;
+  onAnswer: (answer: ApprovalAnswer) => void;
 }
 
 const MAX_ARGS_CHARS = 400;
@@ -24,8 +28,10 @@ function formatArgs(args: unknown): string {
 
 export function ApprovalPrompt({ approval, onAnswer }: ApprovalPromptProps) {
   useInput((input, key) => {
-    if (key.return || input.toLowerCase() === 'y') onAnswer(true);
-    else if (key.escape || input.toLowerCase() === 'n') onAnswer(false);
+    const letter = input.toLowerCase();
+    if (key.return || letter === 'y') onAnswer('allow');
+    else if (letter === 'a') onAnswer('always');
+    else if (key.escape || letter === 'n') onAnswer('decline');
   });
 
   const firstLine = approval.description.split('\n')[0] ?? '';
@@ -38,7 +44,8 @@ export function ApprovalPrompt({ approval, onAnswer }: ApprovalPromptProps) {
       {firstLine && <Text dimColor>{firstLine}</Text>}
       <Text>{formatArgs(approval.args)}</Text>
       <Text>
-        <Text color="green">[y]</Text> allow <Text color="red">[n]</Text> decline
+        <Text color="green">[y]</Text> allow <Text color="green">[a]</Text> always allow{' '}
+        <Text color="red">[n]</Text> decline
       </Text>
     </Box>
   );

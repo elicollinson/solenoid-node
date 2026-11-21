@@ -9,6 +9,7 @@
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
 import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { type AppSettings, saveApprovalRule } from '../config/index.js';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
@@ -23,7 +24,11 @@ import {
   parseToolArgs,
 } from '../harness/index.js';
 import { uiLogger } from '../utils/logger.js';
-import { ApprovalPrompt, type PendingApproval } from './components/ApprovalPrompt.js';
+import {
+  type ApprovalAnswer,
+  ApprovalPrompt,
+  type PendingApproval,
+} from './components/ApprovalPrompt.js';
 import {
   ChatInput,
   ErrorBoundary,
@@ -164,7 +169,7 @@ function AppContent() {
         addSystemMessage(
           `Routes (tried in order):\n${routes}\n\nScreening: ${
             screening.enabled ? `${screening.provider}: ${screening.model}` : 'off'
-          }\n\nTools:\n${harness.toolNames.map((n) => `  - ${n}`).join('\n')}`
+          }\n\nTools:\n${session.toolNames.map((n) => `  - ${n}`).join('\n')}`
         );
         return;
       }
@@ -216,11 +221,23 @@ function AppContent() {
     }
   };
 
-  const answerApproval = (allow: boolean) => {
+  const answerApproval = (answer: ApprovalAnswer) => {
     if (!openApproval || !approval) return;
     setOpenApproval(null);
+    const allow = answer !== 'decline';
     setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
     session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
+    if (answer === 'always') {
+      const saved = saveApprovalRule(approval.tool);
+      if (saved.isValid) {
+        // The rules as saved, which is what every session reads from now on.
+        harness.setApprovalRules((saved.parsedValue as AppSettings['approvals']).rules);
+      } else {
+        harness.setApprovalRules({ ...harness.settings.approvals.rules, [approval.tool]: 'allow' });
+        uiLogger.warn({ errors: saved.errors, tool: approval.tool }, 'Could not save the rule');
+        addSystemMessage(`Allowing ${approval.tool} until you quit; it could not be saved.`);
+      }
+    }
   };
 
   const runTurn = (turn: AutoTurn) => {
@@ -262,7 +279,13 @@ function AppContent() {
   };
 
   if (screen === 'settings') {
-    return <SettingsScreen onClose={() => setScreen('chat')} />;
+    return (
+      <SettingsScreen
+        onClose={() => setScreen('chat')}
+        // Removing an allow takes effect now, not at the next start.
+        onApprovalsSaved={harness.setApprovalRules}
+      />
+    );
   }
   if (screen === 'help') {
     return <HelpScreen onClose={() => setScreen('chat')} />;

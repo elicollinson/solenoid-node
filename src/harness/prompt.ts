@@ -42,7 +42,7 @@ export const SUBAGENT_GUIDE = `Subagents:
 - Each subagent sends you a message when it finishes, as a turn of its own. While any are running, every message you get ends with the status of all of them.
 - Answer the person once you have what they asked for. You can spawn more at any time, including while others run.
 - Once a subagent has finished, subagent_summary and read_subagent_transcript show what it did. message_subagent sends one a follow-up; a finished one starts again on it.
-- A subagent cannot ask the person anything, and its writes are declined.`;
+- A subagent cannot ask the person anything: its writes run only where a standing rule allows them, and are declined otherwise.`;
 
 /** How subagent resolutions are introduced to the parent, after a line naming them. */
 export const SUBAGENT_NEWS =

@@ -22,11 +22,15 @@ import {
  * "I'll do that", which is the one sentence that must not follow a decline.
  * (Wording carried over from Solenoid-Assistant src/agents/chat.ts.)
  */
-export function declinedMessage(tool: string, reason: 'declined' | 'unattended'): string {
-  const what =
-    reason === 'declined'
-      ? `The user declined ${tool}.`
-      : `${tool} needs approval and this run is unattended (pass --yes to allow it).`;
+export function declinedMessage(
+  tool: string,
+  reason: 'declined' | 'unattended' | 'denied'
+): string {
+  const what = {
+    declined: `The user declined ${tool}.`,
+    unattended: `${tool} needs approval and this run is unattended (pass --yes to allow it).`,
+    denied: `A standing rule denies ${tool}; it can never run here, so do not try another way to make the same change.`,
+  }[reason];
   return `${what} NOTHING WAS DONE and nothing changed. Do not call it again. Your next message must say plainly that you have not done it — never describe the change as though it happened — and ask what they would rather you did.`;
 }
 

@@ -14,6 +14,7 @@ import {
   authoredText,
 } from '@elicollinson/solenoid-security';
 import { z } from 'zod';
+import type { ChatMessage } from './providers.js';
 
 export interface FunctionToolDefinition {
   type: 'function';
@@ -83,6 +84,13 @@ const DONE = z
 export interface ToolContext {
   /** The run's signal: stop when it fires. */
   signal: AbortSignal;
+  /** The tools the model was offered this turn, by name: held, and unlocked so far. */
+  offered: ReadonlyMap<string, AgentTool>;
+  /**
+   * The attempt's transcript, live: it already holds the assistant turn that
+   * made this call, and grows once the turn's calls finish. Read, never keep.
+   */
+  messages: readonly ChatMessage[];
   /**
    * Say this call did something a replay would repeat. A committed attempt
    * is never re-run on another route; writes commit on their own.
@@ -97,6 +105,22 @@ export interface AgentTool<S extends z.ZodType = z.ZodType> {
   component?: string;
   schema: S;
   execute: (args: z.infer<S>, context: ToolContext) => unknown | Promise<unknown>;
+  /** Tools this one makes callable, such as a group opener's groups. */
+  unlocks?: Unlocks;
+}
+
+/**
+ * What a tool can unlock. `tools` is all of it, registered with the agent
+ * that holds the tool and checked like its own; `unlocked` reads which of
+ * them a transcript has unlocked, asked before every model call.
+ * Tools are known by identity, not name (see Agent.addTool). Read off the
+ * transcript rather than held, the answer stays right across a
+ * conversation's turns, a cleared one, and a route fallback replaying an
+ * attempt without the call that unlocked them.
+ */
+export interface Unlocks {
+  tools: readonly AgentTool[];
+  unlocked: (messages: readonly ChatMessage[]) => readonly AgentTool[];
 }
 
 export function defineTool<S extends z.ZodType>(config: {
@@ -142,6 +166,9 @@ export function defineTool<S extends z.ZodType>(config: {
     },
   };
 }
+
+/** The name the model calls a tool by. */
+export const toolName = (tool: AgentTool): string => tool.definition.function.name;
 
 /** zod → JSON schema, without the meta-schema pointer backends don't want. */
 export function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
