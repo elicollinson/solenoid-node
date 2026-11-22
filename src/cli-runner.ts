@@ -95,7 +95,13 @@ export async function runNonInteractive(
         reportError(error);
       });
     });
-    write(await session.send(prompt, { signal: controller.signal, onEvent }));
+    if (session.hasIncompleteTurn) {
+      process.stderr.write(`· continuing incomplete turn (${session.incompleteTurnKind})\n`);
+      write(await session.continueTurn({ signal: controller.signal, onEvent }));
+    }
+    if (prompt.trim()) {
+      write(await session.send(prompt, { signal: controller.signal, onEvent }));
+    }
     await session.idle();
     return failed ? 1 : 0;
   } catch (error) {

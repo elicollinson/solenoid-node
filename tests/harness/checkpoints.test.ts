@@ -9,9 +9,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { type AGUIEvent, EventType } from '@ag-ui/core';
+import { z } from 'zod';
 import { AppSettingsSchema } from '../../src/config/index.js';
-import { Agent } from '../../src/core/index.js';
+import { Agent, defineTool } from '../../src/core/index.js';
 import {
+  APPROVAL_REASON,
   CompositeCheckpointStore,
   Session,
   SqliteCheckpointStore,
@@ -20,7 +22,7 @@ import {
   createHarness,
   supabaseSchemaSql,
 } from '../../src/harness/index.js';
-import { ScriptedProvider, say } from '../helpers/scripted-provider.js';
+import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
 
 /** In-memory mock of Supabase PostgREST endpoints for sessions and checkpoints. */
 function createMockSupabaseFetch() {
@@ -474,5 +476,335 @@ describe('Session between-turn checkpointing and resume', () => {
     expect(localResumed.summary.lastDeviceName).toBe('renamed-macbook');
 
     await harness.close();
+  });
+});
+
+describe('Mid-turn step checkpointing and crash recovery', () => {
+  function makeTools(log: string[]) {
+    const readTool = defineTool({
+      name: 'read_doc',
+      description: 'Read a document.',
+      kind: 'read',
+      schema: z.object({ topic: z.string() }),
+      execute: ({ topic }) => {
+        log.push(`read:${topic}`);
+        return `Facts about ${topic}`;
+      },
+    });
+    const writeTool = defineTool({
+      name: 'save_note',
+      description: 'Save a note.',
+      kind: 'write',
+      schema: z.object({ note: z.string() }),
+      execute: ({ note }) => {
+        log.push(`write:${note}`);
+        return 'saved';
+      },
+    });
+    return { readTool, writeTool };
+  }
+
+  test('records turn_start, step_assistant, interrupt, step_tools, and turn_end checkpoints across a multi-step turn', async () => {
+    const store = new SqliteCheckpointStore(':memory:');
+    const device = { id: 'dev-1', name: 'macbook' };
+    const sessionId = 'step-seq-session';
+    const log: string[] = [];
+    const { readTool, writeTool } = makeTools(log);
+
+    const provider = new ScriptedProvider('fake', [
+      call('read_doc', { topic: 'solenoids' }, 'r1'),
+      call('save_note', { note: 'electromagnetic coil' }, 'w1'),
+      say('All done.'),
+    ]);
+
+    const session = new Session(
+      new Agent({
+        routes: [{ client: provider, model: 'm' }],
+        tools: [readTool, writeTool],
+      }),
+      {
+        threadId: sessionId,
+        checkpoint: {
+          save: (cp) => store.save({ ...cp, sessionId, device }),
+          clear: () => store.delete(sessionId),
+        },
+      }
+    );
+
+    const answer = await session.send('Read and save', {
+      onEvent: (e) => {
+        if (e.type === EventType.RUN_FINISHED && e.outcome?.type === 'interrupt') {
+          const [interrupt] = e.outcome.interrupts;
+          session.resume([
+            { interruptId: interrupt!.id, status: 'resolved', payload: { approved: true } },
+          ]);
+        }
+      },
+    });
+
+    expect(answer).toBe('All done.');
+    expect(log).toEqual(['read:solenoids', 'write:electromagnetic coil']);
+
+    const checkpoints = await store.listCheckpoints(sessionId);
+    expect(checkpoints.map((c) => c.kind)).toEqual([
+      'turn_start',
+      'step_assistant',
+      'step_tools',
+      'step_assistant',
+      'interrupt',
+      'step_tools',
+      'turn_end',
+    ]);
+    expect(checkpoints.every((c) => c.turnStartSeq === 1)).toBe(true);
+    expect(checkpoints.at(-2)?.committed).toBe(true);
+    expect(checkpoints.at(-1)?.committed).toBe(true);
+
+    await store.close();
+  });
+
+  test('recovers from a crash at step_tools without re-running completed tools', async () => {
+    const store = new SqliteCheckpointStore(':memory:');
+    const device = { id: 'dev-1', name: 'macbook' };
+    const sessionId = 'crash-after-tools';
+    const log: string[] = [];
+    const { readTool } = makeTools(log);
+
+    // Process 1: runs step 1 (read_doc), then crashes on step 2 LLM call
+    const provider1 = new ScriptedProvider('fake', [
+      call('read_doc', { topic: 'valves' }, 'r1'),
+      () => {
+        throw new Error('simulated crash');
+      },
+    ]);
+    const session1 = new Session(
+      new Agent({ routes: [{ client: provider1, model: 'm' }], tools: [readTool] }),
+      {
+        threadId: sessionId,
+        checkpoint: {
+          save: (cp) => store.save({ ...cp, sessionId, device }),
+        },
+      }
+    );
+    await expect(session1.send('Research valves', { onEvent: () => {} })).rejects.toThrow(
+      'simulated crash'
+    );
+    expect(log).toEqual(['read:valves']);
+
+    // Inspect the step_tools checkpoint that was written right before the crash
+    const checkpoints = await store.listCheckpoints(sessionId);
+    const stepToolsCp = checkpoints.find((c) => c.kind === 'step_tools')!;
+    expect(stepToolsCp).toBeDefined();
+
+    // Process 2: restores from the step_tools checkpoint and continues the turn
+    const provider2 = new ScriptedProvider('fake', [say('Valves regulate flow.')]);
+    const session2 = new Session(
+      new Agent({ routes: [{ client: provider2, model: 'm' }], tools: [readTool] }),
+      {
+        threadId: sessionId,
+        initialTranscript: stepToolsCp.transcript,
+        initialThread: stepToolsCp.thread,
+        initialCheckpoint: {
+          kind: stepToolsCp.kind,
+          committed: stepToolsCp.committed,
+          turnStartSeq: stepToolsCp.turnStartSeq,
+        },
+        checkpoint: {
+          save: (cp) => store.save({ ...cp, sessionId, device }),
+        },
+      }
+    );
+
+    expect(session2.hasIncompleteTurn).toBe(true);
+    expect(session2.incompleteTurnKind).toBe('step_tools');
+
+    const finalOutput = await session2.continueTurn({ onEvent: () => {} });
+    expect(finalOutput).toBe('Valves regulate flow.');
+    // read_doc was NOT executed a second time
+    expect(log).toEqual(['read:valves']);
+    expect(session2.hasIncompleteTurn).toBe(false);
+
+    await store.close();
+  });
+
+  test('recovers from a crash while paused on an approval interrupt, preserving completed reads in the same turn', async () => {
+    const store = new SqliteCheckpointStore(':memory:');
+    const device = { id: 'dev-1', name: 'macbook' };
+    const sessionId = 'crash-at-interrupt';
+    const log: string[] = [];
+    const { readTool, writeTool } = makeTools(log);
+
+    // Process 1: model requests BOTH read_doc and save_note in the same assistant turn
+    const provider1 = new ScriptedProvider('fake', [
+      {
+        role: 'assistant',
+        content: 'Reading and saving.',
+        toolCalls: [
+          { id: 'r1', name: 'read_doc', arguments: { topic: 'coil' } },
+          { id: 'w1', name: 'save_note', arguments: { note: 'coil summary' } },
+        ],
+      },
+    ]);
+
+    let interruptCheckpointSaved = false;
+    const session1 = new Session(
+      new Agent({ routes: [{ client: provider1, model: 'm' }], tools: [readTool, writeTool] }),
+      {
+        threadId: sessionId,
+        checkpoint: {
+          save: async (cp) => {
+            const meta = await store.save({ ...cp, sessionId, device });
+            if (cp.kind === 'interrupt') interruptCheckpointSaved = true;
+            return meta;
+          },
+        },
+      }
+    );
+
+    // Start the turn, wait until it pauses on the approval interrupt, then simulate a process crash
+    const { promise: paused, resolve: onPaused } = Promise.withResolvers<void>();
+    void session1.send('Read coil and save', {
+      onEvent: (e) => {
+        if (e.type === EventType.RUN_FINISHED && e.outcome?.type === 'interrupt') {
+          onPaused();
+        }
+      },
+    });
+    await paused;
+
+    expect(interruptCheckpointSaved).toBe(true);
+    // read_doc already ran before the approval interrupt paused save_note
+    expect(log).toEqual(['read:coil']);
+
+    // Process 2: load latest checkpoint (which is the `interrupt` checkpoint!)
+    const loaded = await store.load(sessionId);
+    expect(loaded?.session.status).toBe('waiting_approval');
+    expect(loaded?.checkpoint.kind).toBe('interrupt');
+
+    const provider2 = new ScriptedProvider('fake', [say('Saved after crash recovery.')]);
+    const session2 = new Session(
+      new Agent({ routes: [{ client: provider2, model: 'm' }], tools: [readTool, writeTool] }),
+      {
+        threadId: loaded!.session.id,
+        initialTranscript: loaded!.checkpoint.transcript,
+        initialThread: loaded!.checkpoint.thread,
+        initialCheckpoint: {
+          kind: loaded!.checkpoint.kind,
+          committed: loaded!.checkpoint.committed,
+          turnStartSeq: loaded!.checkpoint.turnStartSeq,
+        },
+        checkpoint: {
+          save: (cp) => store.save({ ...cp, sessionId, device }),
+        },
+      }
+    );
+
+    expect(session2.hasIncompleteTurn).toBe(true);
+    expect(session2.incompleteTurnKind).toBe('interrupt');
+
+    // Continuing re-emits the approval interrupt for w1 WITHOUT re-running r1
+    const result = await session2.continueTurn({
+      onEvent: (e) => {
+        if (e.type === EventType.RUN_FINISHED && e.outcome?.type === 'interrupt') {
+          const [interrupt] = e.outcome.interrupts;
+          expect(interrupt?.reason).toBe(APPROVAL_REASON);
+          expect(interrupt?.toolCallId).toBe('w1');
+          session2.resume([
+            { interruptId: interrupt!.id, status: 'resolved', payload: { approved: true } },
+          ]);
+        }
+      },
+    });
+
+    expect(result).toBe('Saved after crash recovery.');
+    // r1 ran once (in Process 1), w1 ran once (in Process 2 after approval)
+    expect(log).toEqual(['read:coil', 'write:coil summary']);
+    // No duplicate tool calls in the AG-UI thread
+    const assistantMsg = session2.messages.find((m) => m.role === 'assistant');
+    expect(assistantMsg?.role === 'assistant' && assistantMsg.toolCalls?.map((c) => c.id)).toEqual([
+      'r1',
+      'w1',
+    ]);
+
+    await store.close();
+  });
+
+  test('recovers from a crash at step_assistant by re-running reads and refusing in-flight writes safely', async () => {
+    const store = new SqliteCheckpointStore(':memory:');
+    const device = { id: 'dev-1', name: 'macbook' };
+    const sessionId = 'crash-in-flight-write';
+    const log: string[] = [];
+    const { readTool, writeTool } = makeTools(log);
+
+    // Simulate a checkpoint left at `step_assistant` where the process died while
+    // tools [read_doc, save_note] were in-flight
+    await store.save({
+      sessionId,
+      status: 'running',
+      kind: 'step_assistant',
+      device,
+      transcript: [
+        { role: 'user', content: 'Read and write', origin: 'operator', screened: true },
+        {
+          role: 'assistant',
+          content: '',
+          screened: true,
+          toolCalls: [
+            { id: 'r1', name: 'read_doc', arguments: { topic: 'physics' } },
+            { id: 'w1', name: 'save_note', arguments: { note: 'unsafe repeat' } },
+          ],
+          raw: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'r1',
+                type: 'function',
+                function: { name: 'read_doc', arguments: '{"topic":"physics"}' },
+              },
+              {
+                id: 'w1',
+                type: 'function',
+                function: { name: 'save_note', arguments: '{"note":"unsafe repeat"}' },
+              },
+            ],
+          },
+        },
+      ],
+      thread: [
+        { id: 'u1', role: 'user', content: 'Read and write' },
+        { id: 'a1', role: 'assistant', content: '' },
+      ],
+    });
+
+    const loaded = await store.load(sessionId);
+    const provider = new ScriptedProvider('fake', [
+      say('I read the physics doc; the write was interrupted by a crash so I did not repeat it.'),
+    ]);
+    const session = new Session(
+      new Agent({ routes: [{ client: provider, model: 'm' }], tools: [readTool, writeTool] }),
+      {
+        threadId: sessionId,
+        initialTranscript: loaded!.checkpoint.transcript,
+        initialThread: loaded!.checkpoint.thread,
+        initialCheckpoint: {
+          kind: loaded!.checkpoint.kind,
+          committed: loaded!.checkpoint.committed,
+          turnStartSeq: loaded!.checkpoint.turnStartSeq,
+        },
+        approve: () => ({ allow: true }),
+        checkpoint: {
+          save: (cp) => store.save({ ...cp, sessionId, device }),
+        },
+      }
+    );
+
+    const output = await session.continueTurn({ onEvent: () => {} });
+    expect(output).toContain('write was interrupted');
+    // read_doc ran, save_note was NOT blindly re-run
+    expect(log).toEqual(['read:physics']);
+    const writeToolMsg = provider.calls[0]?.find((m) => m.role === 'tool' && m.toolCallId === 'w1');
+    expect(writeToolMsg?.content).toContain('Process terminated while this write tool was running');
+
+    await store.close();
   });
 });
