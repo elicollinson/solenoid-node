@@ -9,7 +9,7 @@
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
 import { Box, Text, useApp, useInput } from 'ink';
 import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
-import { type AppSettings, saveApprovalRule } from '../config/index.js';
+import { type AppSettings, saveApprovalRule, saveDeviceName } from '../config/index.js';
 import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
@@ -93,7 +93,9 @@ export function App() {
 
 function AppContent() {
   const { exit } = useApp();
-  const { harness, session } = useAgent(); // Suspends until the harness is ready
+  const { harness, session: initialSession } = useAgent(); // Suspends until the harness is ready
+  const [session, setSession] = useState(() => initialSession);
+  const [deviceName, setDeviceName] = useState(() => harness.settings.device.name);
 
   const [chat, setChat] = useState<Chat>(() => ({
     thread: [],
@@ -145,7 +147,11 @@ function AppContent() {
   };
 
   const handleSlashCommand = (command: string): void => {
-    const cmd = command.toLowerCase().trim();
+    const trimmed = command.trim();
+    const spaceIndex = trimmed.indexOf(' ');
+    const cmd = (spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex)).toLowerCase();
+    const arg = spaceIndex === -1 ? '' : trimmed.slice(spaceIndex + 1).trim();
+
     switch (cmd) {
       case '/help':
         setScreen('help');
@@ -161,6 +167,84 @@ function AppContent() {
       case '/exit':
         exit();
         return;
+      case '/device-name': {
+        if (!arg) {
+          addSystemMessage(
+            `Device: ${harness.settings.device.name} (id: ${harness.settings.device.id})`
+          );
+          return;
+        }
+        const saved = saveDeviceName(arg, harness.settings.device.id);
+        if (!saved.isValid) {
+          addSystemMessage(
+            `Invalid device name: ${saved.errors[0]?.message ?? 'could not save settings'}`
+          );
+          return;
+        }
+        const nextName = (saved.parsedValue as AppSettings['device']).name;
+        setDeviceName(nextName);
+        harness
+          .setDeviceName(nextName)
+          .then((count) => {
+            addSystemMessage(
+              `Device name set to "${nextName}" (updated ${count} historic session${count === 1 ? '' : 's'}).`
+            );
+          })
+          .catch((error) => {
+            addSystemMessage(describeRunError(error));
+          });
+        return;
+      }
+      case '/sessions': {
+        harness
+          .listSessions(10)
+          .then((list) => {
+            if (!list.length) {
+              addSystemMessage('No saved sessions.');
+              return;
+            }
+            const lines = list.map((s) => {
+              const where = s.isRemote
+                ? `remote: ${s.lastDeviceName}`
+                : `this device: ${s.lastDeviceName}`;
+              const current = s.id === session.threadId ? ' [current]' : '';
+              return `  ${s.id.slice(0, 8)}  ${s.title} (${s.status}) · ${where}${current}`;
+            });
+            addSystemMessage(`Saved sessions (use /resume [id] to continue):\n${lines.join('\n')}`);
+          })
+          .catch((error) => {
+            addSystemMessage(describeRunError(error));
+          });
+        return;
+      }
+      case '/resume': {
+        if (isProcessing) {
+          addSystemMessage('Cannot switch sessions while a turn is running.');
+          return;
+        }
+        harness
+          .resumeSession(arg || undefined, { canSpawn: true })
+          .then(({ session: resumed, summary, isRemote }) => {
+            if (session !== resumed) session.close();
+            setSession(resumed);
+            const thread = applyEvent([], {
+              type: EventType.MESSAGES_SNAPSHOT,
+              messages: [...resumed.messages],
+            });
+            const originNote = isRemote
+              ? `from remote device ${summary.lastDeviceName}`
+              : `on ${summary.lastDeviceName}`;
+            const noticeText = `Resumed session ${summary.id.slice(0, 8)} ("${summary.title}") ${originNote}.`;
+            setChat({
+              thread,
+              notices: [{ id: crypto.randomUUID(), text: noticeText, at: thread.length }],
+            });
+          })
+          .catch((error) => {
+            addSystemMessage(describeRunError(error));
+          });
+        return;
+      }
       case '/tools': {
         const routes = harness.routes
           .map((r, i) => `  ${i + 1}. ${r.provider}: ${r.model}`)
@@ -169,7 +253,7 @@ function AppContent() {
         addSystemMessage(
           `Routes (tried in order):\n${routes}\n\nScreening: ${
             screening.enabled ? `${screening.provider}: ${screening.model}` : 'off'
-          }\n\nTools:\n${session.toolNames.map((n) => `  - ${n}`).join('\n')}`
+          }\n\nDevice: ${harness.settings.device.name} (${harness.settings.device.id})\n\nTools:\n${session.toolNames.map((n) => `  - ${n}`).join('\n')}`
         );
         return;
       }
@@ -268,6 +352,17 @@ function AppContent() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: an effect event is never a dependency.
   useEffect(() => session.onAutoTurn((turn) => runAutoTurn(turn)), [session]);
 
+  const handleResumeCommand = useEffectEvent((target?: string) => {
+    handleSlashCommand(target ? `/resume ${target}` : '/resume');
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once at startup when --continue or --resume was passed.
+  useEffect(() => {
+    const startupResume = process.env.SOLENOID_RESUME_SESSION;
+    if (!startupResume) return;
+    process.env.SOLENOID_RESUME_SESSION = '';
+    handleResumeCommand(startupResume === '__latest__' ? undefined : startupResume);
+  }, []);
+
   const handleSubmit = (text: string) => {
     uiLogger.info({ text }, 'handleSubmit called');
 
@@ -284,6 +379,10 @@ function AppContent() {
         onClose={() => setScreen('chat')}
         // Removing an allow takes effect now, not at the next start.
         onApprovalsSaved={harness.setApprovalRules}
+        onDeviceSaved={(device) => {
+          setDeviceName(device.name);
+          void harness.setDeviceName(device.name);
+        }}
       />
     );
   }
@@ -324,6 +423,7 @@ function AppContent() {
         <Box paddingX={1}>
           <Text dimColor>
             {primary.provider}: {primary.model}
+            {` · ${deviceName}`}
             {harness.settings.screening.enabled ? ' · screening on' : ' · screening off'}
           </Text>
         </Box>

@@ -67,6 +67,24 @@ export function loadSettings(path?: string): AppSettings {
     throw new Error(`Invalid configuration in ${configPath}:\n${errors}`);
   }
 
+  // Persist generated device identity on first load of an older settings file
+  // so this machine keeps the same device.id and derived device.name across runs.
+  const rawDevice = raw.device as { id?: unknown; name?: unknown } | undefined;
+  if (
+    typeof rawDevice?.id !== 'string' ||
+    !rawDevice.id.trim() ||
+    typeof rawDevice?.name !== 'string' ||
+    !rawDevice.name.trim()
+  ) {
+    raw.device = { id: result.data.device.id, name: result.data.device.name };
+    try {
+      const yaml = stringifyYaml(raw, { indent: 2, lineWidth: 0 });
+      writeFileSync(configPath, yaml, 'utf-8');
+    } catch {
+      // Read-only settings path: keep the in-memory identity for this run.
+    }
+  }
+
   cachedSettings = result.data;
   cachedRawSettings = raw;
   settingsPath = configPath;
@@ -173,4 +191,40 @@ export function getProviderApiKey(
 export function getSearchApiKey(settings: AppSettings): string | undefined {
   if (settings.search.provider !== 'brave') return undefined;
   return secret('BRAVE_SEARCH_API_KEY', settings.search.brave_search_api_key);
+}
+
+/** Local SQLite path for session checkpoints (~/.solenoid/checkpoints.db by default). */
+export function getSqliteCheckpointPath(settings: AppSettings): string {
+  if (settings.checkpoints.sqlite_path) {
+    return resolve(settings.checkpoints.sqlite_path);
+  }
+  if (process.env.NODE_ENV === 'test') {
+    return ':memory:';
+  }
+  return resolve(homedir(), SOLENOID_CONFIG_DIR, 'checkpoints.db');
+}
+
+export interface SupabaseCredentials {
+  url: string;
+  apiKey: string;
+  tablePrefix: string;
+}
+
+/**
+ * Supabase connection settings for remote checkpoints, or undefined when not
+ * configured. Environment variables override app_settings.yaml.
+ */
+export function getSupabaseCheckpointConfig(
+  settings: AppSettings
+): SupabaseCredentials | undefined {
+  const supabase = settings.checkpoints.supabase;
+  const url = secret('SUPABASE_URL', supabase.url);
+  const apiKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    supabase.api_key ||
+    undefined;
+  if (!url || !apiKey) return undefined;
+  return { url, apiKey, tablePrefix: supabase.table_prefix };
 }

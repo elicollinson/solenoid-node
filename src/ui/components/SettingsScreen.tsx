@@ -22,6 +22,8 @@ interface SettingsScreenProps {
   onClose: () => void;
   /** The approval rules were saved: they apply at once, unlike other settings. */
   onApprovalsSaved?: (rules: AppSettings['approvals']['rules']) => void;
+  /** The device config was saved: update the device name and historical records at once. */
+  onDeviceSaved?: (device: AppSettings['device']) => void;
 }
 
 interface EditorLine {
@@ -51,7 +53,7 @@ function linesToYaml(lines: EditorLine[]): string {
 /** Editor lines shown at once, centred on the current one. */
 const MAX_VISIBLE_LINES = 12;
 
-export function SettingsScreen({ onClose, onApprovalsSaved }: SettingsScreenProps) {
+export function SettingsScreen({ onClose, onApprovalsSaved, onDeviceSaved }: SettingsScreenProps) {
   const [sections] = useState<SectionInfo[]>(() => getAllSections());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mode, setMode] = useState<Mode>('selection');
@@ -93,6 +95,8 @@ export function SettingsScreen({ onClose, onApprovalsSaved }: SettingsScreenProp
       setValidationResult(null);
       if (editingSection === 'approvals') {
         onApprovalsSaved?.((result.parsedValue as AppSettings['approvals']).rules);
+      } else if (editingSection === 'device') {
+        onDeviceSaved?.(result.parsedValue as AppSettings['device']);
       }
     } else {
       setMessage({ text: result.errors[0]?.message || 'Validation failed', type: 'error' });

@@ -11,7 +11,9 @@ import { type AGUIEvent, EventType } from '@ag-ui/core';
  */
 import { loadSettings } from './config/index.js';
 import {
+  type AgentProfile,
   CUSTOM_EVENTS,
+  type Session,
   createHarness,
   customValue,
   declineUnattended,
@@ -24,6 +26,8 @@ import { setupErrorHandlers, uiLogger } from './utils/logger.js';
 export interface NonInteractiveOptions {
   /** Allow write tools without asking. */
   yes?: boolean;
+  /** Resume a session by ID/prefix, or true to resume the latest session. */
+  resume?: string | boolean;
 }
 
 /**
@@ -50,10 +54,24 @@ export async function runNonInteractive(
     // Standing rules answer first: allow runs, deny never does. Nobody is
     // here to answer the rest: --yes allows them, and otherwise each is
     // declined as unattended.
-    const session = harness.createSession({
+    const profile: AgentProfile = {
       canSpawn: true,
       approve: options.yes ? () => ({ allow: true }) : declineUnattended,
-    });
+    };
+    let session: Session;
+    if (options.resume) {
+      const targetId = typeof options.resume === 'string' ? options.resume : undefined;
+      const resumed = await harness.resumeSession(targetId, profile);
+      session = resumed.session;
+      const where = resumed.isRemote
+        ? `from remote device ${resumed.summary.lastDeviceName}`
+        : `on ${resumed.summary.lastDeviceName}`;
+      process.stderr.write(
+        `· resumed session ${resumed.summary.id.slice(0, 8)} ("${resumed.summary.title}") ${where}\n`
+      );
+    } else {
+      session = harness.createSession(profile);
+    }
     const onEvent = (event: AGUIEvent) => {
       const route = customValue(event, CUSTOM_EVENTS.routeAdvanced);
       if (event.type === EventType.TOOL_CALL_START) {

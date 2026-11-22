@@ -26,6 +26,7 @@ import {
   Agent,
   type AgentTool,
   type ApprovalHandler,
+  type ChatMessage,
   type ModelRoute,
   type ModelRouteChain,
   OpenAICompatibleProvider,
@@ -37,6 +38,7 @@ import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
 import { applyEvent } from './ag-ui/reducer.js';
+import { type CheckpointStore, type SessionSummary, createCheckpointStore } from './checkpoints.js';
 import { type PermissionRules, resolvePermission, withPermissions } from './permissions.js';
 import { type AgentProfile, profilePermissions, profileTools } from './profile.js';
 import {
@@ -46,7 +48,7 @@ import {
   SUMMARIZER_PROMPT,
   withToday,
 } from './prompt.js';
-import { Session, declineUnattended, encodeTurn } from './session.js';
+import { Session, type SessionCheckpointer, declineUnattended, encodeTurn } from './session.js';
 import { SubagentManager } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
@@ -155,12 +157,31 @@ function createScreener(settings: AppSettings): Screener | undefined {
   return createSecurity({ provider: judge, authoredText }).screen;
 }
 
+export interface ResumedSession {
+  session: Session;
+  summary: SessionSummary;
+  /** True when the session's last checkpoint was written on a different device. */
+  isRemote: boolean;
+}
+
+export interface ListedSession extends SessionSummary {
+  /** True when the session's last checkpoint was written on a different device. */
+  isRemote: boolean;
+}
+
+export interface CreateHarnessOptions {
+  /** Override the checkpoint store, or pass null to disable persistence. */
+  checkpointStore?: CheckpointStore | null;
+}
+
 export interface Harness {
   settings: AppSettings;
   /** The routes the agent tries, in order: `settings.routes` less any that were skipped. */
   routes: RouteRef[];
   /** Problems that did not stop startup: skipped routes, MCP servers that failed to connect. */
   warnings: string[];
+  /** Durable checkpoint store when `settings.checkpoints.enabled` is true. */
+  checkpoints?: CheckpointStore;
   /**
    * A new conversation with an agent of `profile`; the default profile is
    * the CLI's agent. With `canSpawn`, the agent also holds the subagent
@@ -186,6 +207,18 @@ export interface Harness {
     }
   ): Promise<z.infer<S>>;
   /**
+   * Resume a saved conversation by ID/prefix, or the most recent one when
+   * omitted. Reports whether the session was last run on a remote device.
+   */
+  resumeSession(sessionIdOrPrefix?: string, profile?: AgentProfile): Promise<ResumedSession>;
+  /** List saved top-level sessions, newest first, marking which ran on a remote device. */
+  listSessions(limit?: number): Promise<ListedSession[]>;
+  /**
+   * Update this machine's device name in memory and backfill historical
+   * session and checkpoint records for this device ID.
+   */
+  setDeviceName(name: string): Promise<number>;
+  /**
    * Replace the person's standing rules (`settings.approvals.rules`), live
    * for every session at its next write. Saving them is the caller's: the
    * harness never writes a settings file.
@@ -194,7 +227,10 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(settings: AppSettings): Promise<Harness> {
+export async function createHarness(
+  settings: AppSettings,
+  options: CreateHarnessOptions = {}
+): Promise<Harness> {
   const { routes, skipped } = createRoutes(settings);
   const screen = createScreener(settings);
   const mcp = new McpManager();
@@ -203,6 +239,10 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     ...builtinTools({ searchApiKey: getSearchApiKey(settings) }),
     ...mcp.getAgentTools(),
   ];
+  const checkpoints =
+    options.checkpointStore === null
+      ? undefined
+      : (options.checkpointStore ?? createCheckpointStore(settings));
 
   const systemPrompt = settings.agent.system_prompt ?? DEFAULT_SYSTEM_PROMPT;
   const makeAgent = (name: string, agentTools: AgentTool[], prompt: string) =>
@@ -228,6 +268,23 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     return result.output;
   };
 
+  const checkpointerFor = (
+    sessionId: string,
+    parentId?: string
+  ): SessionCheckpointer | undefined =>
+    checkpoints
+      ? {
+          save: (cp) =>
+            checkpoints.save({
+              ...cp,
+              sessionId,
+              ...(parentId ? { parentId } : {}),
+              device: settings.device,
+            }),
+          clear: () => checkpoints.delete(sessionId),
+        }
+      : undefined;
+
   // Every open session, so closing the harness closes them and their subagents.
   const sessions = new Set<Session>();
   // The person's standing rules live in `settings.approvals.rules`, which
@@ -245,18 +302,33 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     agentTools: profileTools(tools, profile),
     prompt: profile.systemPrompt ?? systemPrompt,
   });
-  const createSession: Harness['createSession'] = (profile = {}) => {
+  const openSession = (
+    profile: AgentProfile = {},
+    restored?: {
+      threadId: string;
+      transcript: readonly ChatMessage[];
+      thread: readonly Message[];
+    }
+  ): Session => {
+    const threadId = restored?.threadId ?? crypto.randomUUID();
     const { name, agentTools, prompt } = resolve(profile);
     const policy = policyFor(profile);
     const manager = profile.canSpawn
       ? new SubagentManager({
           tools: agentTools,
           // A child follows the same rules; nobody can answer its asks, so they are declined.
-          createSession: (childName, childTools) =>
-            new Session(
+          createSession: (childName, childTools) => {
+            const childId = crypto.randomUUID();
+            return new Session(
               makeAgent(`${name}/${childName}`, childTools, `${prompt}\n\n${SUBAGENT_ROLE}`),
-              { approve: declineUnattended, policy }
-            ),
+              {
+                threadId: childId,
+                approve: declineUnattended,
+                policy,
+                checkpoint: checkpointerFor(childId, threadId),
+              }
+            );
+          },
           summarize,
         })
       : undefined;
@@ -264,6 +336,10 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       ? makeAgent(name, [...agentTools, ...manager.tools()], `${prompt}\n\n${SUBAGENT_GUIDE}`)
       : makeAgent(name, agentTools, prompt);
     const session: Session = new Session(agent, {
+      threadId,
+      initialTranscript: restored?.transcript,
+      initialThread: restored?.thread,
+      checkpoint: checkpointerFor(threadId),
       approve: profile.approve,
       policy,
       background: manager,
@@ -275,6 +351,48 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     sessions.add(session);
     return session;
   };
+
+  const createSession: Harness['createSession'] = (profile = {}) => openSession(profile);
+
+  const resumeSession: Harness['resumeSession'] = async (sessionIdOrPrefix, profile = {}) => {
+    if (!checkpoints) {
+      throw new Error('Checkpoints are disabled in settings (checkpoints.enabled: false).');
+    }
+    const key = sessionIdOrPrefix?.trim();
+    const loaded = key ? await checkpoints.load(key) : await checkpoints.loadLatest();
+    if (!loaded) {
+      throw new Error(key ? `No saved session matching "${key}".` : 'No saved sessions to resume.');
+    }
+    const session = openSession(profile, {
+      threadId: loaded.session.id,
+      transcript: loaded.checkpoint.transcript,
+      thread: loaded.checkpoint.thread,
+    });
+    return {
+      session,
+      summary: loaded.session,
+      isRemote: loaded.session.lastDeviceId !== settings.device.id,
+    };
+  };
+
+  const listSessions: Harness['listSessions'] = async (limit = 20) => {
+    if (!checkpoints) return [];
+    const list = await checkpoints.list(limit);
+    return list.map((s) => ({
+      ...s,
+      isRemote: s.lastDeviceId !== settings.device.id,
+    }));
+  };
+
+  const setDeviceName: Harness['setDeviceName'] = async (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('Device name cannot be empty.');
+    const oldName = settings.device.name;
+    settings.device.name = trimmed;
+    if (!checkpoints) return 0;
+    return checkpoints.renameDevice(settings.device.id, trimmed, oldName);
+  };
+
   const runStructured: Harness['runStructured'] = (prompt, schema, options = {}) => {
     const { profile = {}, signal, onEvent } = options;
     const { name, agentTools, prompt: system } = resolve(profile);
@@ -313,6 +431,8 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
       settingsPath: getSettingsPath(),
       routes: routeRefs,
       screening: settings.screening.enabled,
+      device: settings.device,
+      checkpoints: Boolean(checkpoints),
       baseTools: tools.map((t) => t.definition.function.name),
     },
     'Harness ready'
@@ -321,6 +441,7 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
   return {
     settings,
     routes: routeRefs,
+    checkpoints,
     warnings: [
       ...skipped,
       ...mcpFailures.map((name) => `Could not connect to MCP server ${name}. See logs/server.log.`),
@@ -335,12 +456,16 @@ export async function createHarness(settings: AppSettings): Promise<Harness> {
     ],
     createSession,
     runStructured,
+    resumeSession,
+    listSessions,
+    setDeviceName,
     setApprovalRules: (rules) => {
       settings.approvals.rules = rules;
     },
     close: async () => {
       for (const session of sessions) session.close();
       await mcp.close();
+      await checkpoints?.close();
     },
   };
 }

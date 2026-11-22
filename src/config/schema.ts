@@ -10,6 +10,7 @@
  * a default.
  */
 import { z } from 'zod';
+import { deriveDeviceName } from './device.js';
 
 export const PROVIDER_NAMES = ['lmstudio', 'openrouter'] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
@@ -134,6 +135,49 @@ export const ApprovalsConfigSchema = z
   })
   .prefault({});
 
+export const DeviceConfigSchema = z
+  .object({
+    /** Stable machine identifier so renaming `name` updates historical records in place. */
+    id: z
+      .string()
+      .trim()
+      .min(1)
+      .default(() => crypto.randomUUID()),
+    /** Human-readable device name shown on sessions and checkpoints. */
+    name: z
+      .string()
+      .trim()
+      .min(1, 'Device name cannot be empty')
+      .max(64, 'Device name must be 64 characters or fewer')
+      .default(() => deriveDeviceName()),
+  })
+  .prefault({});
+
+export const SupabaseCheckpointConfigSchema = z
+  .object({
+    /** Supabase project URL (or SUPABASE_URL). When set with a key, checkpoints sync remotely. */
+    url: z.url().optional(),
+    /** Supabase service role or anon key (or SUPABASE_SERVICE_ROLE_KEY / SUPABASE_ANON_KEY). */
+    api_key: z.string().min(1).optional(),
+    /** Table name prefix in Postgres. Defaults to `solenoid_`. */
+    table_prefix: z
+      .string()
+      .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, 'Table prefix must be a valid SQL identifier')
+      .default('solenoid_'),
+  })
+  .prefault({});
+
+export const CheckpointsConfigSchema = z
+  .object({
+    /** Persist conversation checkpoints so sessions can be resumed across restarts or devices. */
+    enabled: z.boolean().default(true),
+    /** Custom path to the local SQLite database file (defaults to ~/.solenoid/checkpoints.db). */
+    sqlite_path: z.string().min(1).optional(),
+    /** Optional Supabase connector for cross-device session sync and resume. */
+    supabase: SupabaseCheckpointConfigSchema,
+  })
+  .prefault({});
+
 export const AppSettingsSchema = z.object({
   providers: ProvidersConfigSchema,
   routes: RoutesConfigSchema,
@@ -144,6 +188,8 @@ export const AppSettingsSchema = z.object({
   keyboard: KeyboardConfigSchema,
   display: DisplayConfigSchema,
   approvals: ApprovalsConfigSchema,
+  device: DeviceConfigSchema,
+  checkpoints: CheckpointsConfigSchema,
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -157,4 +203,7 @@ export type McpHttpServer = z.infer<typeof McpHttpServerSchema>;
 export type McpServer = z.infer<typeof McpServerSchema>;
 export type KeyboardConfig = z.infer<typeof KeyboardConfigSchema>;
 export type DisplayConfig = z.infer<typeof DisplayConfigSchema>;
+export type DeviceConfig = z.infer<typeof DeviceConfigSchema>;
+export type SupabaseCheckpointConfig = z.infer<typeof SupabaseCheckpointConfigSchema>;
+export type CheckpointsConfig = z.infer<typeof CheckpointsConfigSchema>;
 export type AppSettings = z.infer<typeof AppSettingsSchema>;

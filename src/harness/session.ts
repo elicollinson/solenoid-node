@@ -30,6 +30,7 @@ import {
 } from '../core/index.js';
 import { type EncoderSink, TurnEncoder } from './ag-ui/encoder.js';
 import { applyEvent } from './ag-ui/reducer.js';
+import type { CheckpointKind, SavedCheckpointMeta, SessionStatus } from './checkpoints.js';
 import { declinedMessage, describeRunError } from './messages.js';
 
 /** The interrupt reason for a write waiting on a person. */
@@ -53,7 +54,31 @@ export interface SendOptions {
   origin?: 'operator' | 'agent';
 }
 
+export interface SessionCheckpointer {
+  save(input: {
+    status: SessionStatus;
+    kind: CheckpointKind;
+    committed?: boolean;
+    turnStartSeq?: number;
+    transcript: readonly ChatMessage[];
+    thread: readonly Message[];
+    pending?: Record<string, unknown>;
+  }): Promise<SavedCheckpointMeta>;
+  clear?(): Promise<void>;
+}
+
 export interface SessionOptions {
+  /**
+   * Conversation thread ID. Defaults to a fresh UUID; set when resuming a
+   * saved session from a checkpoint.
+   */
+  threadId?: string;
+  /** Prior model transcript when resuming a saved session. */
+  initialTranscript?: readonly ChatMessage[];
+  /** Prior AG-UI message thread when resuming a saved session. */
+  initialThread?: readonly Message[];
+  /** Optional durable checkpointer called at turn (and step) boundaries. */
+  checkpoint?: SessionCheckpointer;
   /**
    * Who is asked about a write. By default each ask ends the AG-UI run with
    * an interrupt for the client to answer with `resume`; with nobody there to
@@ -149,7 +174,7 @@ export async function encodeTurn<T>(
 }
 
 export class Session {
-  readonly threadId = crypto.randomUUID();
+  readonly threadId: string;
   private transcript: ChatMessage[] = [];
   private thread: Message[] = [];
   private readonly pending = new Map<string, (entry: ResumeEntry) => void>();
@@ -166,6 +191,13 @@ export class Session {
     private readonly agent: Agent,
     private readonly options: SessionOptions = {}
   ) {
+    this.threadId = options.threadId ?? crypto.randomUUID();
+    if (options.initialTranscript) {
+      this.transcript = options.initialTranscript.map((m) => ({ ...m }));
+    }
+    if (options.initialThread) {
+      this.thread = [...options.initialThread];
+    }
     options.background?.onNews(() => this.notify());
   }
 
@@ -224,6 +256,11 @@ export class Session {
     return this.thread;
   }
 
+  /** The model's conversation transcript so far. */
+  get transcriptMessages(): readonly ChatMessage[] {
+    return this.transcript;
+  }
+
   /**
    * Run one turn. Resolves once the agent has answered, across any
    * interrupts in between; rejects with the error that ended it, after the
@@ -268,25 +305,59 @@ export class Session {
       },
       thread: () => this.thread,
     };
-    return encodeTurn(this.threadId, sink, { text, role }, async (encoder) => {
-      const ask: ApprovalHandler =
-        this.options.approve ?? ((request) => this.interrupt(request, encoder));
-      try {
-        const result = await this.agent.runMessages([...this.transcript, sent], {
-          signal,
-          onEvent: (event) => encoder.handle(event),
-          approve: this.options.policy?.(ask) ?? ask,
+    // Saved where the turn starts and however it ends, after the stream has
+    // reported the end, so a resumed thread holds the whole turn.
+    let turnStart: SavedCheckpointMeta | undefined;
+    let ended: SessionStatus = 'idle';
+    try {
+      return await encodeTurn(this.threadId, sink, { text, role }, async (encoder) => {
+        turnStart = await this.saveCheckpoint({
+          status: 'running',
+          kind: 'turn_start',
+          transcript: [...this.transcript, user],
+          thread: this.thread,
         });
-        this.transcript = kept(result.messages);
-        return result.output;
-      } catch (error) {
-        // The turn's work is lost, but what was asked is kept so a follow-up
-        // ("try again", "continue") still has its context. It is not marked
-        // screened, so the next turn screens it again.
-        this.transcript = [...this.transcript, user];
-        throw error;
-      }
-    });
+        const ask: ApprovalHandler =
+          this.options.approve ?? ((request) => this.interrupt(request, encoder));
+        try {
+          const result = await this.agent.runMessages([...this.transcript, sent], {
+            signal,
+            onEvent: (event) => encoder.handle(event),
+            approve: this.options.policy?.(ask) ?? ask,
+          });
+          this.transcript = kept(result.messages);
+          return result.output;
+        } catch (error) {
+          // The turn's work is lost, but what was asked is kept so a follow-up
+          // ("try again", "continue") still has its context. It is not marked
+          // screened, so the next turn screens it again.
+          this.transcript = [...this.transcript, user];
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (!(error instanceof AgentAbortedError)) ended = 'failed';
+      throw error;
+    } finally {
+      await this.saveCheckpoint({
+        status: ended,
+        kind: 'turn_end',
+        turnStartSeq: turnStart?.turnStartSeq,
+        transcript: this.transcript,
+        thread: this.thread,
+      });
+    }
+  }
+
+  private async saveCheckpoint(
+    input: Parameters<SessionCheckpointer['save']>[0]
+  ): Promise<SavedCheckpointMeta | undefined> {
+    if (!this.options.checkpoint) return undefined;
+    try {
+      return await this.options.checkpoint.save(input);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Answer interrupts the last run ended on. Each opens the run that continues it. */
@@ -301,6 +372,7 @@ export class Session {
   clear(): void {
     this.transcript = [];
     this.thread = [];
+    void this.options.checkpoint?.clear?.().catch(noop);
   }
 
   /**
