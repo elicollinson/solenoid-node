@@ -358,13 +358,21 @@ export async function createHarness(
     }));
   };
 
-  const setDeviceName: Harness['setDeviceName'] = async (name) => {
+  let deviceRenameChain: Promise<void> = Promise.resolve();
+  const setDeviceName: Harness['setDeviceName'] = (name) => {
     const trimmed = name.trim();
-    if (!trimmed) throw new Error('Device name cannot be empty.');
-    const oldName = settings.device.name;
-    settings.device.name = trimmed;
-    if (!checkpoints) return 0;
-    return checkpoints.renameDevice(settings.device.id, trimmed, oldName);
+    if (!trimmed) return Promise.reject(new Error('Device name cannot be empty.'));
+    const next = deviceRenameChain.then(async () => {
+      const oldName = settings.device.name;
+      settings.device.name = trimmed;
+      if (!checkpoints) return 0;
+      return checkpoints.renameDevice(settings.device.id, trimmed, oldName);
+    });
+    deviceRenameChain = next.then(
+      () => {},
+      () => {}
+    );
+    return next;
   };
 
   const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));

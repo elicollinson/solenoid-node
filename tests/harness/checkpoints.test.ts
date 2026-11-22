@@ -475,4 +475,54 @@ describe('Session between-turn checkpointing and resume', () => {
 
     await harness.close();
   });
+
+  test('Harness.setDeviceName serializes concurrent renames and recovers after a failure', async () => {
+    const calls: Array<{ newName: string; oldName?: string }> = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const store = new SqliteCheckpointStore(':memory:');
+    const originalRename = store.renameDevice.bind(store);
+    let callIndex = 0;
+    store.renameDevice = async (deviceId, newName, oldName) => {
+      calls.push({ newName, oldName });
+      const idx = callIndex++;
+      if (idx === 0) {
+        await firstGate;
+        throw new Error('transient remote error');
+      }
+      return originalRename(deviceId, newName, oldName);
+    };
+
+    const settings = AppSettingsSchema.parse({
+      screening: { enabled: false },
+      device: { id: 'dev-mine', name: 'initial' },
+    });
+    const harness = await createHarness(settings, { checkpointStore: store });
+
+    const first = harness.setDeviceName('first-name');
+    const second = harness.setDeviceName('second-name');
+    const third = harness.setDeviceName('third-name');
+
+    // Only the first rename should have started while its gate is closed.
+    await Promise.resolve();
+    expect(calls).toEqual([{ newName: 'first-name', oldName: 'initial' }]);
+
+    releaseFirst();
+
+    await expect(first).rejects.toThrow('transient remote error');
+    expect(await second).toBe(0);
+    expect(await third).toBe(0);
+
+    expect(calls).toEqual([
+      { newName: 'first-name', oldName: 'initial' },
+      { newName: 'second-name', oldName: 'first-name' },
+      { newName: 'third-name', oldName: 'second-name' },
+    ]);
+    expect(harness.settings.device.name).toBe('third-name');
+
+    await harness.close();
+  });
 });
