@@ -416,6 +416,61 @@ describe('Session between-turn checkpointing and resume', () => {
     await store.close();
   });
 
+  test('each turn saves its start, then its end once the stream has reported it', async () => {
+    const log: string[] = [];
+    const controller = new AbortController();
+    const session = new Session(
+      new Agent({
+        routes: [
+          {
+            client: new ScriptedProvider('fake', [
+              say('one'),
+              () => {
+                controller.abort();
+                throw new Error('aborted');
+              },
+              new Error('bad request'),
+            ]),
+            model: 'm',
+          },
+        ],
+      }),
+      {
+        checkpoint: {
+          save: async (cp) => {
+            log.push(`${cp.kind}:${cp.status}:${cp.transcript.map((m) => m.role).join()}`);
+            return { seq: log.length, turnStartSeq: log.length };
+          },
+        },
+      }
+    );
+    const onEvent = (event: AGUIEvent) => {
+      if (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR)
+        log.push('stream ended');
+    };
+
+    await session.send('first', { onEvent });
+    await session.send('second', { onEvent, signal: controller.signal }).catch(() => {});
+    await session.send('third', { onEvent }).catch(() => {});
+    // A turn whose opening event the client's handler rejects never started.
+    const rejecting = () => {
+      throw new Error('client bug');
+    };
+    await session.send('fourth', { onEvent: rejecting }).catch(() => {});
+
+    expect(log).toEqual([
+      'turn_start:running:user',
+      'stream ended',
+      'turn_end:idle:user,assistant',
+      'turn_start:running:user,assistant,user',
+      'stream ended',
+      'turn_end:idle:user,assistant,user',
+      'turn_start:running:user,assistant,user,user',
+      'stream ended',
+      'turn_end:failed:user,assistant,user,user',
+    ]);
+  });
+
   test('Harness.resumeSession, listSessions, and setDeviceName track local vs remote devices', async () => {
     const store = new SqliteCheckpointStore(':memory:');
     // Simulate a remote session already in the store from another device

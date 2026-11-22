@@ -36,10 +36,13 @@ export interface ToolResultMetadata {
   quarantined?: boolean;
   /** No call was made: the person declined it. */
   declined?: boolean;
+  /** No call was made: the tool does not exist, or the arguments failed its schema. */
+  malformed?: boolean;
   durationMs?: number;
 }
 
-function resultMetadata(metadata: Record<string, unknown> | undefined): ToolResultMetadata {
+/** Solenoid's outcome fields on a TOOL_CALL_RESULT or a tool message; empty when it has none. */
+export function resultMetadata(metadata: Record<string, unknown> | undefined): ToolResultMetadata {
   return (metadata?.[SOLENOID_METADATA_KEY] as ToolResultMetadata | undefined) ?? {};
 }
 

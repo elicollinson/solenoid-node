@@ -27,6 +27,12 @@ export interface ToolOutcome {
   quarantined?: boolean;
   /** No call was made: the approval handler refused it. */
   declined?: boolean;
+  /**
+   * No call was made because the model got it wrong: the tool does not exist,
+   * or the arguments failed its schema. Set apart from a tool that ran and
+   * failed, which is the world's doing and not the model's.
+   */
+  malformed?: boolean;
   /** A display call the model said completes its answer. */
   done?: boolean;
 }

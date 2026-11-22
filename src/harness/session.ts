@@ -28,7 +28,7 @@ import {
   type ApprovalRequest,
   type ChatMessage,
 } from '../core/index.js';
-import { TurnEncoder } from './ag-ui/encoder.js';
+import { type EncoderSink, TurnEncoder } from './ag-ui/encoder.js';
 import { applyEvent } from './ag-ui/reducer.js';
 import type { CheckpointKind, SavedCheckpointMeta, SessionStatus } from './checkpoints.js';
 import { declinedMessage, describeRunError } from './messages.js';
@@ -144,6 +144,33 @@ export function approvalAnswer(
   return answer === 'unattended'
     ? { interruptId, status: 'cancelled' }
     : { interruptId, status: 'resolved', payload: { approved: answer === 'allow' } };
+}
+
+/**
+ * One agent run as an AG-UI turn: open it with `opening`, hand `run` the
+ * encoder to feed the agent's events to, and end the stream the way the run
+ * ended (answered, stopped or failed). The run's error is rethrown once the
+ * stream has reported it.
+ */
+export async function encodeTurn<T>(
+  threadId: string,
+  sink: EncoderSink,
+  opening: { text: string; role: OpeningRole },
+  run: (encoder: TurnEncoder) => Promise<T>
+): Promise<T> {
+  const encoder = new TurnEncoder(threadId, sink);
+  // Synchronous up to the run's first await, so a client draws the opening
+  // message the moment the turn is asked for.
+  encoder.startTurn({ id: crypto.randomUUID(), ...opening });
+  try {
+    const result = await run(encoder);
+    encoder.complete();
+    return result;
+  } catch (error) {
+    if (error instanceof AgentAbortedError) encoder.cancel();
+    else encoder.fail(describeRunError(error), (error as { code?: string }).code);
+    throw error;
+  }
 }
 
 export class Session {
@@ -271,57 +298,59 @@ export class Session {
       const at = messages.findLastIndex((m) => m.role === 'user' && m.content === sent.content);
       return messages.map((m, i) => (i === at ? { ...m, content: text } : m));
     };
-    const encoder = new TurnEncoder(this.threadId, {
+    const sink: EncoderSink = {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
         onEvent(event);
       },
       thread: () => this.thread,
-    });
-
-    // Synchronous up to the agent's first await, so a client draws the
-    // person's message the moment it calls send.
-    encoder.startTurn({ id: crypto.randomUUID(), text, role });
-    const turnStart = await this.saveCheckpoint({
-      status: 'running',
-      kind: 'turn_start',
-      transcript: [...this.transcript, user],
-      thread: this.thread,
-    });
-    const ask: ApprovalHandler =
-      this.options.approve ?? ((request) => this.interrupt(request, encoder));
+    };
+    // Saved where the turn starts and however it ends, after the stream has
+    // reported the end, so a resumed thread holds the whole turn. A turn that
+    // never opened (the client's handler threw on an opening event) saves nothing.
+    let opened = false;
+    let turnStart: SavedCheckpointMeta | undefined;
+    let ended: SessionStatus = 'idle';
     try {
-      const result = await this.agent.runMessages([...this.transcript, sent], {
-        signal,
-        onEvent: (event) => encoder.handle(event),
-        approve: this.options.policy?.(ask) ?? ask,
+      return await encodeTurn(this.threadId, sink, { text, role }, async (encoder) => {
+        opened = true;
+        turnStart = await this.saveCheckpoint({
+          status: 'running',
+          kind: 'turn_start',
+          transcript: [...this.transcript, user],
+          thread: this.thread,
+        });
+        const ask: ApprovalHandler =
+          this.options.approve ?? ((request) => this.interrupt(request, encoder));
+        try {
+          const result = await this.agent.runMessages([...this.transcript, sent], {
+            signal,
+            onEvent: (event) => encoder.handle(event),
+            approve: this.options.policy?.(ask) ?? ask,
+          });
+          this.transcript = kept(result.messages);
+          return result.output;
+        } catch (error) {
+          // The turn's work is lost, but what was asked is kept so a follow-up
+          // ("try again", "continue") still has its context. It is not marked
+          // screened, so the next turn screens it again.
+          this.transcript = [...this.transcript, user];
+          throw error;
+        }
       });
-      this.transcript = kept(result.messages);
-      encoder.complete();
-      await this.saveCheckpoint({
-        status: 'idle',
-        kind: 'turn_end',
-        turnStartSeq: turnStart?.turnStartSeq,
-        transcript: this.transcript,
-        thread: this.thread,
-      });
-      return result.output;
     } catch (error) {
-      // The turn's work is lost, but what was asked is kept so a follow-up
-      // ("try again", "continue") still has its context. It is not marked
-      // screened, so the next turn screens it again.
-      this.transcript = [...this.transcript, user];
-      const aborted = error instanceof AgentAbortedError;
-      if (aborted) encoder.cancel();
-      else encoder.fail(describeRunError(error), (error as { code?: string }).code);
-      await this.saveCheckpoint({
-        status: aborted ? 'idle' : 'failed',
-        kind: 'turn_end',
-        turnStartSeq: turnStart?.turnStartSeq,
-        transcript: this.transcript,
-        thread: this.thread,
-      });
+      if (!(error instanceof AgentAbortedError)) ended = 'failed';
       throw error;
+    } finally {
+      if (opened) {
+        await this.saveCheckpoint({
+          status: ended,
+          kind: 'turn_end',
+          turnStartSeq: turnStart?.turnStartSeq,
+          transcript: this.transcript,
+          thread: this.thread,
+        });
+      }
     }
   }
 

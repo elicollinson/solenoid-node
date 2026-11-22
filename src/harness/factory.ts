@@ -1,3 +1,4 @@
+import type { AGUIEvent, Message } from '@ag-ui/core';
 /**
  * Harness Factory
  *
@@ -6,13 +7,13 @@
  * judge) and the base tool set (built-ins plus every connected MCP server).
  * Each session's agent is built from a profile (./profile.ts) on top of them.
  */
-import type { Message } from '@ag-ui/core';
 import {
   OpenAICompatibleJudge,
   authoredText,
   createSecurity,
 } from '@elicollinson/solenoid-security';
 import OpenAI from 'openai';
+import type { z } from 'zod';
 import {
   type AppSettings,
   PROVIDER_KEY_ENV,
@@ -36,6 +37,7 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
+import { applyEvent } from './ag-ui/reducer.js';
 import { type CheckpointStore, type SessionSummary, createCheckpointStore } from './checkpoints.js';
 import { type PermissionRules, resolvePermission, withPermissions } from './permissions.js';
 import { type AgentProfile, profilePermissions, profileTools } from './profile.js';
@@ -46,7 +48,7 @@ import {
   SUMMARIZER_PROMPT,
   withToday,
 } from './prompt.js';
-import { Session, type SessionCheckpointer, declineUnattended } from './session.js';
+import { Session, type SessionCheckpointer, declineUnattended, encodeTurn } from './session.js';
 import { SubagentManager } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
@@ -188,6 +190,23 @@ export interface Harness {
    */
   createSession(profile?: AgentProfile): Session;
   /**
+   * One prompt in, one object matching `schema` out, from an agent of
+   * `profile` (the default profile when omitted). No conversation is kept,
+   * and `canSpawn` does not apply. The standing approval rules answer its
+   * writes first; what they leave at ask goes to the profile's `approve`,
+   * and with none it is declined, since nobody is there to ask. `onEvent`
+   * gets the run as the AG-UI events of one turn, as a session's `send` does.
+   */
+  runStructured<S extends z.ZodType>(
+    prompt: string,
+    schema: S,
+    options?: {
+      profile?: AgentProfile;
+      signal?: AbortSignal;
+      onEvent?: (event: AGUIEvent) => void;
+    }
+  ): Promise<z.infer<S>>;
+  /**
    * Resume a saved conversation by ID/prefix, or the most recent one when
    * omitted. Reports whether the session was last run on a remote device.
    */
@@ -268,6 +287,21 @@ export async function createHarness(
 
   // Every open session, so closing the harness closes them and their subagents.
   const sessions = new Set<Session>();
+  // The person's standing rules live in `settings.approvals.rules`, which
+  // setApprovalRules replaces, so `settings` stays true. The rules answer
+  // first, before any asker, and are read at each write, so a rule changed
+  // while a session runs applies to its next one.
+  const policyFor = (profile: AgentProfile) => {
+    const agentRules = profilePermissions(profile);
+    return (ask: ApprovalHandler) =>
+      withPermissions((tool) => resolvePermission(settings.approvals.rules, agentRules, tool), ask);
+  };
+  /** What a profile comes to on this harness: its agent's name, tools and prompt. */
+  const resolve = (profile: AgentProfile) => ({
+    name: profile.name ?? 'solenoid',
+    agentTools: profileTools(tools, profile),
+    prompt: profile.systemPrompt ?? systemPrompt,
+  });
   const openSession = (
     profile: AgentProfile = {},
     restored?: {
@@ -277,14 +311,8 @@ export async function createHarness(
     }
   ): Session => {
     const threadId = restored?.threadId ?? crypto.randomUUID();
-    const name = profile.name ?? 'solenoid';
-    const agentTools = profileTools(tools, profile);
-    const prompt = profile.systemPrompt ?? systemPrompt;
-    const agentRules = profilePermissions(profile);
-    // The rules answer first, before any asker, and are read at each write,
-    // so a rule changed while the session runs applies to its next one.
-    const policy = (ask: ApprovalHandler) =>
-      withPermissions((tool) => resolvePermission(settings.approvals.rules, agentRules, tool), ask);
+    const { name, agentTools, prompt } = resolve(profile);
+    const policy = policyFor(profile);
     const manager = profile.canSpawn
       ? new SubagentManager({
           tools: agentTools,
@@ -324,8 +352,6 @@ export async function createHarness(
     return session;
   };
 
-  // The person's standing rules live in `settings.approvals.rules`, which
-  // setApprovalRules replaces, so `settings` stays true.
   const createSession: Harness['createSession'] = (profile = {}) => openSession(profile);
 
   const resumeSession: Harness['resumeSession'] = async (sessionIdOrPrefix, profile = {}) => {
@@ -367,6 +393,38 @@ export async function createHarness(
     return checkpoints.renameDevice(settings.device.id, trimmed, oldName);
   };
 
+  const runStructured: Harness['runStructured'] = (prompt, schema, options = {}) => {
+    const { profile = {}, signal, onEvent } = options;
+    const { name, agentTools, prompt: system } = resolve(profile);
+    const agent = makeAgent(name, agentTools, system);
+    // A turn with no session behind it: the thread is kept only for the
+    // encoder's own snapshots.
+    let thread: Message[] = [];
+    const sink = {
+      emit: (event: AGUIEvent) => {
+        thread = applyEvent(thread, event);
+        onEvent?.(event);
+      },
+      thread: () => thread,
+    };
+    return encodeTurn(
+      crypto.randomUUID(),
+      sink,
+      { text: prompt, role: 'user' },
+      async (encoder) => {
+        const result = await agent.runMessages(
+          [{ role: 'user', content: prompt, origin: 'operator' }],
+          {
+            signal,
+            schema,
+            onEvent: (event) => encoder.handle(event),
+            approve: policyFor(profile)(profile.approve ?? declineUnattended),
+          }
+        );
+        return result.output;
+      }
+    );
+  };
   const routeRefs = routes.map((r) => ({ provider: r.client.providerName, model: r.model }));
   agentLogger.info(
     {
@@ -397,6 +455,7 @@ export async function createHarness(
         ),
     ],
     createSession,
+    runStructured,
     resumeSession,
     listSessions,
     setDeviceName,
