@@ -53,7 +53,9 @@ On first run, `~/.solenoid/app_settings.yaml` is created with defaults. A route 
 
 ```bash
 solenoid --run "Summarize https://example.com in one sentence."
-solenoid --run "..." --yes   # also allow tools that change things
+solenoid --run "..." --yes        # also allow tools that change things
+solenoid --continue               # resume the most recent saved session
+solenoid --resume <session-id>    # resume a specific session by ID or prefix
 ```
 
 The answer goes to stdout. Tool activity and warnings go to stderr. Nobody is present to approve a write, so writes are declined unless you pass `--yes`.
@@ -255,6 +257,9 @@ An MCP tool asks for approval unless its server marks it `readOnlyHint`. Setting
 |---------|-------------|
 | `/help` | Show help screen |
 | `/settings` | Open settings editor |
+| `/sessions` | List saved sessions and which device they ran on |
+| `/resume [id]` | Resume the most recent session, or one matching `[id]` |
+| `/device-name [name]` | Show or update this machine's device name across all saved sessions |
 | `/clear` | Clear the conversation |
 | `/tools` | Show model routes, screening and tools |
 | `/quit`, `/exit` | Exit application |

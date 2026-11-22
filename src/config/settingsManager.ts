@@ -20,6 +20,14 @@ const KNOWN_SECTIONS: Record<string, { displayName: string; description: string 
   keyboard: { displayName: 'Keyboard', description: 'Keyboard shortcut configuration' },
   display: { displayName: 'Display', description: 'Chat display preferences' },
   approvals: { displayName: 'Approvals', description: 'Standing allow/ask/deny rules for writes' },
+  device: {
+    displayName: 'Device',
+    description: 'Device name and ID recorded on session checkpoints',
+  },
+  checkpoints: {
+    displayName: 'Checkpoints',
+    description: 'Local SQLite and optional Supabase session persistence',
+  },
 };
 
 /**
@@ -140,6 +148,17 @@ export function saveApprovalRule(tool: string): ValidationResult {
     'approvals',
     stringifyYaml({ ...approvals, rules: { ...approvals.rules, [tool]: 'allow' } })
   );
+}
+
+/**
+ * Save a new device name to `device.name`, preserving `device.id` so historic
+ * records from this machine stay linked.
+ */
+export function saveDeviceName(name: string, currentId?: string): ValidationResult {
+  const rawDevice = (getRawSettings()?.device ?? {}) as { id?: string; name?: string };
+  const id =
+    (typeof rawDevice.id === 'string' && rawDevice.id.trim()) || currentId || crypto.randomUUID();
+  return updateSection('device', stringifyYaml({ ...rawDevice, id, name: name.trim() }));
 }
 
 /**

@@ -30,6 +30,9 @@ export function HelpScreen({ onClose }: HelpScreenProps) {
         <Box paddingLeft={2} flexDirection="column">
           <Text>/help - Show this help screen</Text>
           <Text>/settings - View current settings</Text>
+          <Text>/sessions - List saved sessions and their devices</Text>
+          <Text>/resume [id] - Resume the latest session or one matching [id]</Text>
+          <Text>/device-name [name] - Show or rename this device across all history</Text>
           <Text>/clear - Clear the conversation</Text>
           <Text>/tools - Show model routes, screening and tools</Text>
           <Text>/quit - Exit the application</Text>
