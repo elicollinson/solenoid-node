@@ -106,6 +106,9 @@ function AppContent() {
   const [screen, setScreen] = useState<Screen>('chat');
   const [openApproval, setOpenApproval] = useState<OpenApproval | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const sessionRef = useRef(initialSession);
+  const resumingRef = useRef(false);
+  const resumeSeqRef = useRef(0);
   const interruptKey = harness.settings.keyboard.interrupt;
   const showReasoning = harness.settings.display.show_reasoning;
   const approval = openApproval && pendingApproval(chat.thread, openApproval);
@@ -160,7 +163,8 @@ function AppContent() {
         setScreen('settings');
         return;
       case '/clear':
-        session.clear();
+        if (isProcessing || abortRef.current || resumingRef.current) return;
+        sessionRef.current.clear();
         setChat({ thread: [], notices: [] });
         return;
       case '/quit':
@@ -218,14 +222,24 @@ function AppContent() {
         return;
       }
       case '/resume': {
-        if (isProcessing) {
+        if (isProcessing || abortRef.current || resumingRef.current) {
           addSystemMessage('Cannot switch sessions while a turn is running.');
           return;
         }
+        resumingRef.current = true;
+        const seq = ++resumeSeqRef.current;
+        setIsProcessing(true);
+        setStatus('Resuming session...');
         harness
           .resumeSession(arg || undefined, { canSpawn: true })
           .then(({ session: resumed, summary, isRemote }) => {
-            if (session !== resumed) session.close();
+            if (seq !== resumeSeqRef.current) {
+              resumed.close();
+              return;
+            }
+            const previous = sessionRef.current;
+            if (previous !== resumed) previous.close();
+            sessionRef.current = resumed;
             setSession(resumed);
             const thread = applyEvent([], {
               type: EventType.MESSAGES_SNAPSHOT,
@@ -241,7 +255,16 @@ function AppContent() {
             });
           })
           .catch((error) => {
+            if (seq !== resumeSeqRef.current) return;
             addSystemMessage(describeRunError(error));
+          })
+          .then(() => {
+            if (seq !== resumeSeqRef.current) return;
+            resumingRef.current = false;
+            // A news turn started on the resumed session owns the state now.
+            if (abortRef.current) return;
+            setIsProcessing(false);
+            setStatus('Ready');
           });
         return;
       }
@@ -370,7 +393,8 @@ function AppContent() {
       handleSlashCommand(text);
       return;
     }
-    runTurn((options) => session.send(text, options));
+    if (abortRef.current || resumingRef.current) return;
+    runTurn((options) => sessionRef.current.send(text, options));
   };
 
   if (screen === 'settings') {
@@ -381,7 +405,10 @@ function AppContent() {
         onApprovalsSaved={harness.setApprovalRules}
         onDeviceSaved={(device) => {
           setDeviceName(device.name);
-          void harness.setDeviceName(device.name);
+          harness.setDeviceName(device.name).catch((error) => {
+            uiLogger.warn({ error: String(error) }, 'Failed to rename device in checkpoints');
+            addSystemMessage(describeRunError(error));
+          });
         }}
       />
     );
