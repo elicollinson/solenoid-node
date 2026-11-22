@@ -67,6 +67,12 @@ export interface SessionCheckpointer {
   clear?(): Promise<void>;
 }
 
+export interface IncompleteCheckpointState {
+  kind: CheckpointKind;
+  committed?: boolean;
+  turnStartSeq?: number;
+}
+
 export interface SessionOptions {
   /**
    * Conversation thread ID. Defaults to a fresh UUID; set when resuming a
@@ -77,6 +83,8 @@ export interface SessionOptions {
   initialTranscript?: readonly ChatMessage[];
   /** Prior AG-UI message thread when resuming a saved session. */
   initialThread?: readonly Message[];
+  /** Metadata of the checkpoint this session was restored from, for mid-turn recovery. */
+  initialCheckpoint?: IncompleteCheckpointState;
   /** Optional durable checkpointer called at turn (and step) boundaries. */
   checkpoint?: SessionCheckpointer;
   /**
@@ -153,6 +161,7 @@ export class Session {
   private readonly pending = new Map<string, (entry: ResumeEntry) => void>();
 
   private closed = false;
+  private incompleteCheckpoint: IncompleteCheckpointState | undefined;
   /**
    * Settles once the turn running now has ended and any news turn after it
    * has started; undefined while no turn runs.
@@ -171,7 +180,20 @@ export class Session {
     if (options.initialThread) {
       this.thread = [...options.initialThread];
     }
+    if (options.initialCheckpoint && options.initialCheckpoint.kind !== 'turn_end') {
+      this.incompleteCheckpoint = { ...options.initialCheckpoint };
+    }
     options.background?.onNews(() => this.notify());
+  }
+
+  /** True when the session was restored from a mid-turn checkpoint that has not finished yet. */
+  get hasIncompleteTurn(): boolean {
+    return this.incompleteCheckpoint !== undefined;
+  }
+
+  /** The mid-turn checkpoint boundary this session was paused or interrupted at, if any. */
+  get incompleteTurnKind(): CheckpointKind | undefined {
+    return this.incompleteCheckpoint?.kind;
   }
 
   /** Names of every tool this session's agent can call: those it holds, then those in its groups. */
@@ -240,7 +262,27 @@ export class Session {
    * stream has reported it (RUN_ERROR, or a cancelled RUN_FINISHED).
    */
   send(text: string, options: SendOptions): Promise<string> {
+    this.incompleteCheckpoint = undefined;
     return this.run(text, 'user', options);
+  }
+
+  /**
+   * Continue an incomplete turn restored from a mid-turn checkpoint
+   * (`turn_start`, `step_assistant`, `step_tools`, or `interrupt`).
+   */
+  async continueTurn(options: Omit<SendOptions, 'origin'>): Promise<string> {
+    while (this.running) await this.running;
+    const checkpoint = this.incompleteCheckpoint;
+    if (!checkpoint) {
+      throw new Error('No incomplete turn to continue.');
+    }
+    this.incompleteCheckpoint = undefined;
+    const turn = this.executeContinuation(checkpoint, options);
+    this.running = turn.then(noop, noop).then(() => {
+      this.running = undefined;
+      this.notify();
+    });
+    return turn;
   }
 
   private async run(text: string, role: OpeningRole, options: SendOptions): Promise<string> {
@@ -282,18 +324,54 @@ export class Session {
     // Synchronous up to the agent's first await, so a client draws the
     // person's message the moment it calls send.
     encoder.startTurn({ id: crypto.randomUUID(), text, role });
+    let workingTranscript: ChatMessage[] = [...this.transcript, user];
+    let workingCommitted = false;
     const turnStart = await this.saveCheckpoint({
       status: 'running',
       kind: 'turn_start',
-      transcript: [...this.transcript, user],
+      transcript: workingTranscript,
       thread: this.thread,
     });
+    const turnStartSeq = turnStart?.turnStartSeq;
     const ask: ApprovalHandler =
-      this.options.approve ?? ((request) => this.interrupt(request, encoder));
+      this.options.approve ??
+      ((request) =>
+        this.interrupt(request, encoder, {
+          transcript: workingTranscript,
+          committed: workingCommitted,
+          turnStartSeq,
+        }));
     try {
       const result = await this.agent.runMessages([...this.transcript, sent], {
         signal,
-        onEvent: (event) => encoder.handle(event),
+        onEvent: (event) => {
+          encoder.handle(event);
+          if (event.type === 'route_advanced') {
+            workingTranscript = [...this.transcript, user];
+            workingCommitted = false;
+            void this.saveCheckpoint({
+              status: 'running',
+              kind: 'turn_start',
+              turnStartSeq,
+              transcript: workingTranscript,
+              thread: this.thread,
+            });
+          }
+        },
+        onStep: async (step) => {
+          workingTranscript = kept(step.messages);
+          workingCommitted = step.committed;
+          if (step.kind === 'assistant' || step.kind === 'tools') {
+            await this.saveCheckpoint({
+              status: 'running',
+              kind: step.kind === 'assistant' ? 'step_assistant' : 'step_tools',
+              committed: step.committed,
+              turnStartSeq,
+              transcript: workingTranscript,
+              thread: this.thread,
+            });
+          }
+        },
         approve: this.options.policy?.(ask) ?? ask,
       });
       this.transcript = kept(result.messages);
@@ -301,7 +379,8 @@ export class Session {
       await this.saveCheckpoint({
         status: 'idle',
         kind: 'turn_end',
-        turnStartSeq: turnStart?.turnStartSeq,
+        committed: workingCommitted,
+        turnStartSeq,
         transcript: this.transcript,
         thread: this.thread,
       });
@@ -317,7 +396,85 @@ export class Session {
       await this.saveCheckpoint({
         status: aborted ? 'idle' : 'failed',
         kind: 'turn_end',
-        turnStartSeq: turnStart?.turnStartSeq,
+        committed: workingCommitted,
+        turnStartSeq,
+        transcript: this.transcript,
+        thread: this.thread,
+      });
+      throw error;
+    }
+  }
+
+  private async executeContinuation(
+    checkpoint: IncompleteCheckpointState,
+    { onEvent, signal }: Omit<SendOptions, 'origin'>
+  ): Promise<string> {
+    const encoder = new TurnEncoder(this.threadId, {
+      emit: (event) => {
+        this.thread = applyEvent(this.thread, event);
+        onEvent(event);
+      },
+      thread: () => this.thread,
+    });
+    const lastAssistant = [...this.thread].reverse().find((m) => m.role === 'assistant');
+    encoder.continueTurn(lastAssistant?.id);
+
+    let workingTranscript: ChatMessage[] = this.transcript.map((m) => ({ ...m }));
+    let workingCommitted = Boolean(checkpoint.committed);
+    const turnStartSeq = checkpoint.turnStartSeq;
+    const ask: ApprovalHandler =
+      this.options.approve ??
+      ((request) =>
+        this.interrupt(request, encoder, {
+          transcript: workingTranscript,
+          committed: workingCommitted,
+          turnStartSeq,
+        }));
+    try {
+      const result = await this.agent.runMessages(this.transcript, {
+        signal,
+        resumeStep: {
+          kind: checkpoint.kind,
+          committed: checkpoint.committed,
+        },
+        onEvent: (event) => encoder.handle(event),
+        onStep: async (step) => {
+          workingTranscript = step.messages.map((m) => ({ ...m }));
+          workingCommitted = step.committed;
+          if (step.kind === 'assistant' || step.kind === 'tools') {
+            await this.saveCheckpoint({
+              status: 'running',
+              kind: step.kind === 'assistant' ? 'step_assistant' : 'step_tools',
+              committed: step.committed,
+              turnStartSeq,
+              transcript: workingTranscript,
+              thread: this.thread,
+            });
+          }
+        },
+        approve: this.options.policy?.(ask) ?? ask,
+      });
+      this.transcript = result.messages;
+      encoder.complete();
+      await this.saveCheckpoint({
+        status: 'idle',
+        kind: 'turn_end',
+        committed: workingCommitted,
+        turnStartSeq,
+        transcript: this.transcript,
+        thread: this.thread,
+      });
+      return result.output;
+    } catch (error) {
+      this.transcript = workingTranscript;
+      const aborted = error instanceof AgentAbortedError;
+      if (aborted) encoder.cancel();
+      else encoder.fail(describeRunError(error), (error as { code?: string }).code);
+      await this.saveCheckpoint({
+        status: aborted ? 'idle' : 'failed',
+        kind: 'turn_end',
+        committed: workingCommitted,
+        turnStartSeq,
         transcript: this.transcript,
         thread: this.thread,
       });
@@ -348,6 +505,7 @@ export class Session {
   clear(): void {
     this.transcript = [];
     this.thread = [];
+    this.incompleteCheckpoint = undefined;
     void this.options.checkpoint?.clear?.().catch(noop);
   }
 
@@ -355,7 +513,15 @@ export class Session {
    * A write waiting on a person: end the AG-UI run with an interrupt, and
    * hold the agent's call until `resume` answers it or the turn is stopped.
    */
-  private interrupt(request: ApprovalRequest, encoder: TurnEncoder): Promise<ToolVerdict> {
+  private interrupt(
+    request: ApprovalRequest,
+    encoder: TurnEncoder,
+    checkpointState?: {
+      transcript: readonly ChatMessage[];
+      committed: boolean;
+      turnStartSeq?: number;
+    }
+  ): Promise<ToolVerdict> {
     const interrupt: Interrupt = {
       id: `approval:${request.toolCallId}`,
       reason: APPROVAL_REASON,
@@ -379,7 +545,28 @@ export class Session {
         encoder.startRun();
         settle(verdictFor(entry, request.tool));
       });
-      encoder.pause([interrupt]);
+      const emitPause = () => {
+        if (!request.signal.aborted && this.pending.has(interrupt.id)) {
+          encoder.pause([interrupt]);
+        }
+      };
+      if (checkpointState) {
+        void this.saveCheckpoint({
+          status: 'waiting_approval',
+          kind: 'interrupt',
+          committed: checkpointState.committed,
+          turnStartSeq: checkpointState.turnStartSeq,
+          transcript: checkpointState.transcript,
+          thread: this.thread,
+          pending: {
+            interruptId: interrupt.id,
+            toolCallId: request.toolCallId,
+            tool: request.tool,
+          },
+        }).then(emitPause, emitPause);
+      } else {
+        emitPause();
+      }
     });
   }
 }

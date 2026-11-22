@@ -113,6 +113,8 @@ export interface CheckpointStore {
   loadLatest(): Promise<LoadedSession | undefined>;
   /** List top-level sessions, ordered by most recently updated first. */
   list(limit?: number): Promise<SessionSummary[]>;
+  /** List all saved checkpoints for a session in sequence order (`seq ASC`). */
+  listCheckpoints(sessionId: string): Promise<CheckpointRecord[]>;
   /**
    * Backfill `newName` across all historical sessions and checkpoints created
    * or updated by `deviceId` (or matching `oldName`). Returns the number of
@@ -479,6 +481,15 @@ export class SqliteCheckpointStore implements CheckpointStore {
     return Promise.resolve(rows.map(rowToSessionSummary));
   }
 
+  listCheckpoints(sessionId: string): Promise<CheckpointRecord[]> {
+    const rows = this.db
+      .query<SqliteCheckpointRow, [string]>(
+        'SELECT * FROM checkpoints WHERE session_id = ?1 ORDER BY seq ASC'
+      )
+      .all(sessionId);
+    return Promise.resolve(rows.map(rowToCheckpointRecord));
+  }
+
   renameDevice(deviceId: string, newName: string, oldName?: string): Promise<number> {
     const trimmed = newName.trim();
     const prev = oldName?.trim() || null;
@@ -820,6 +831,14 @@ export class SupabaseCheckpointStore implements CheckpointStore {
     return (rows ?? []).map(rowToSessionSummary);
   }
 
+  async listCheckpoints(sessionId: string): Promise<CheckpointRecord[]> {
+    const rows = await this.request<SupabaseCheckpointRow[]>(
+      this.checkpointsTable,
+      `session_id=eq.${encodeURIComponent(sessionId)}&order=seq.asc&select=*`
+    );
+    return (rows ?? []).map(supabaseRowToCheckpoint);
+  }
+
   async renameDevice(deviceId: string, newName: string, oldName?: string): Promise<number> {
     const trimmed = newName.trim();
     const prev = oldName?.trim();
@@ -968,6 +987,16 @@ export class CompositeCheckpointStore implements CheckpointStore {
     return [...merged.values()]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit);
+  }
+
+  async listCheckpoints(sessionId: string): Promise<CheckpointRecord[]> {
+    const localCheckpoints = await this.local.listCheckpoints(sessionId);
+    if (localCheckpoints.length) return localCheckpoints;
+    try {
+      return await this.remote.listCheckpoints(sessionId);
+    } catch {
+      return [];
+    }
   }
 
   async renameDevice(deviceId: string, newName: string, oldName?: string): Promise<number> {

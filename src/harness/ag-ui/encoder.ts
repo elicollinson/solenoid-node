@@ -102,6 +102,19 @@ export class TurnEncoder {
     this.turnStart = this.sink.thread().length;
   }
 
+  /**
+   * Open a run that continues an interrupted or crashed turn from its last
+   * checkpointed thread, without emitting a duplicate opening message.
+   */
+  continueTurn(existingAssistantId?: string): void {
+    this.startRun();
+    this.turnStart = this.sink.thread().length;
+    this.stepStart = this.sink.thread().length;
+    if (existingAssistantId) {
+      this.assistantId = existingAssistantId;
+    }
+  }
+
   /** Open a run: at the start of the turn, and again after each answered interrupt. */
   startRun(): void {
     this.runId = crypto.randomUUID();

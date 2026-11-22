@@ -117,6 +117,22 @@ export interface AgentOptions {
   logger?: AgentLogger;
 }
 
+export interface AgentStepSnapshot {
+  /** Which boundary in the loop just settled. */
+  kind: 'assistant' | 'tools' | 'interrupt';
+  turn: number;
+  committed: boolean;
+  /** Snapshot of the attempt's working transcript at this boundary. */
+  messages: ChatMessage[];
+}
+
+export interface ResumeStepOptions {
+  /** Which checkpoint boundary is being resumed (`step_assistant`, `interrupt`, etc.). */
+  kind: 'turn_start' | 'step_assistant' | 'step_tools' | 'interrupt' | 'turn_end';
+  /** Whether a write tool had already committed before the interruption. */
+  committed?: boolean;
+}
+
 export interface RunOptions {
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void;
@@ -126,6 +142,10 @@ export interface RunOptions {
    * call proceeds, as there is nobody to ask.
    */
   approve?: ApprovalHandler;
+  /** Called at step and approval boundaries so a caller can checkpoint mid-turn progress. */
+  onStep?: (step: AgentStepSnapshot) => Promise<void> | void;
+  /** When resuming an incomplete turn from a checkpoint, describes where it stopped. */
+  resumeStep?: ResumeStepOptions;
 }
 
 export interface RunResult<T = string> {
@@ -151,6 +171,9 @@ interface Attempt {
   emit: (event: AgentEvent) => void;
   approve?: ApprovalHandler;
   schema?: z.ZodType;
+  turn: number;
+  onStep?: (step: AgentStepSnapshot) => Promise<void> | void;
+  resumeStep?: ResumeStepOptions;
   /** Set once a write tool has run. A committed attempt is never replayed. */
   committed: boolean;
   /** The tools of the current turn: the agent's own plus any the transcript unlocked. */
@@ -341,7 +364,10 @@ export class Agent {
             emit,
             approve: options.approve,
             schema: options.schema,
-            committed: false,
+            turn: 0,
+            onStep: options.onStep,
+            resumeStep: index === 0 ? options.resumeStep : undefined,
+            committed: index === 0 && Boolean(options.resumeStep?.committed),
             tools: this.tools,
             messages: working,
             shown: new Set(),
@@ -426,9 +452,28 @@ export class Agent {
     let retryDelayMs = 250;
     let retries = 0;
     let toldFinalTurn = false;
+
+    const pendingBatch = findPendingToolBatch(messages);
+    if (pendingBatch) {
+      attempt.turn = 1;
+      attempt.tools = this.turnTools(messages);
+      const recoveryKind = attempt.resumeStep?.kind ?? 'step_assistant';
+      attempt.resumeStep = undefined;
+      const resumed = await this.executeToolBatch(
+        pendingBatch.assistantMessage,
+        pendingBatch.remainingCalls,
+        messages,
+        attempt,
+        submitDefinition,
+        recoveryKind
+      );
+      if (resumed.finalAnswer !== undefined) return resumed.finalAnswer;
+    }
+
     while (true) {
       if (signal.aborted) throw abortReason(signal);
       turn++;
+      attempt.turn = turn;
       if (turn > this.maxTurns) {
         throw new AgentRunError(`No answer after ${this.maxTurns} model turns`);
       }
@@ -503,70 +548,15 @@ export class Agent {
         throw new AgentRunError(`Model still called tools on its last turn (${this.maxTurns})`);
       }
       if (msg.toolCalls?.length) {
-        // One output per call, in call order. Everything but a write runs
-        // concurrently, screens included. A write waits for the calls before
-        // it and holds back the ones after, because it may stop for approval
-        // and commits the attempt.
-        const outputs: Array<Promise<ToolOutcome>> = [];
-        let reads: Array<Promise<ToolOutcome>> = [];
-        let reviewerFeedback: string | undefined;
-        const told = (output: string): Promise<ToolOutcome> =>
-          Promise.resolve({ ok: true, output });
-
-        for (const call of msg.toolCalls) {
-          if (submitDefinition && schema && call.name === SUBMIT_RESULT_TOOL_NAME) {
-            if (msg.toolCalls.length > 1) {
-              outputs.push(
-                told(
-                  'Result deferred because this turn requested additional tools. ' +
-                    'Use their results, then submit the final result in its own turn.'
-                )
-              );
-              continue;
-            }
-            const parsed = schema.safeParse(call.arguments);
-            if (!parsed.success) {
-              outputs.push(told(`Result rejected: ${z.prettifyError(parsed.error)}`));
-              continue;
-            }
-            const submitted = JSON.stringify(parsed.data);
-            reviewerFeedback = await this.reviewFeedback(messages, submitted, attempt);
-            if (!reviewerFeedback) return submitted;
-            outputs.push(told(`Result rejected: ${reviewerFeedback}`));
-            continue;
-          }
-
-          const kind = attempt.tools.get(call.name)?.kind;
-          // Unknown tools fail fast; they go the sequential way like a write.
-          if (kind && kind !== 'write') {
-            const output = this.runToolCall(call, attempt);
-            reads.push(output);
-            outputs.push(output);
-            continue;
-          }
-          await Promise.all(reads);
-          reads = [];
-          const output = await this.runToolCall(call, attempt);
-          outputs.push(Promise.resolve(output));
-        }
-
-        const results = await Promise.all(outputs);
-        msg.toolCalls.forEach((call, i) => {
-          pushToolResult(messages, call.id, call.name, results[i]!.output);
-        });
-        if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
-
-        // A display call's `done` ends the reply, but only when the turn
-        // holds nothing else: a read's result is still the model's to read.
-        const done =
-          msg.toolCalls.every((call) => attempt.tools.get(call.name)?.kind === 'display') &&
-          results.some((r) => r.done);
-        if (done && !schema) {
-          const answer = msg.content.trim();
-          const feedback = await this.reviewFeedback(messages, answer, attempt);
-          if (!feedback) return answer;
-          messages.push({ role: 'system', content: feedback });
-        }
+        await this.reportStep('assistant', messages, attempt);
+        const batchOutcome = await this.executeToolBatch(
+          msg,
+          msg.toolCalls,
+          messages,
+          attempt,
+          submitDefinition
+        );
+        if (batchOutcome.finalAnswer !== undefined) return batchOutcome.finalAnswer;
         continue;
       }
 
@@ -613,6 +603,135 @@ export class Agent {
       if (!feedback) return content;
       messages.push({ role: 'system', content: feedback });
     }
+  }
+
+  private async reportStep(
+    kind: AgentStepSnapshot['kind'],
+    messages: readonly ChatMessage[],
+    attempt: Attempt
+  ): Promise<void> {
+    if (!attempt.onStep) return;
+    try {
+      await attempt.onStep({
+        kind,
+        turn: attempt.turn,
+        committed: attempt.committed,
+        messages: messages.map((m) => ({ ...m })),
+      });
+    } catch (error) {
+      this.log.warn({ error: String(error), kind }, '[agent] step listener threw');
+    }
+  }
+
+  /**
+   * Run a batch of tool calls from an assistant turn. Read/internal/display
+   * tools run concurrently; each write tool flushes preceding reads into
+   * `messages` before asking for approval or executing so a checkpoint taken
+   * at an approval interrupt already holds those read results.
+   */
+  private async executeToolBatch(
+    msg: ChatMessage,
+    callsToRun: readonly ToolCall[],
+    messages: ChatMessage[],
+    attempt: Attempt,
+    submitDefinition?: FunctionToolDefinition,
+    recoveryKind?: ResumeStepOptions['kind']
+  ): Promise<{ finalAnswer?: string }> {
+    const { schema } = attempt;
+    let pendingReads: Array<{ call: ToolCall; promise: Promise<ToolOutcome> }> = [];
+    const results: ToolOutcome[] = [];
+    let reviewerFeedback: string | undefined;
+
+    const flushReads = async () => {
+      if (!pendingReads.length) return;
+      const batch = pendingReads;
+      pendingReads = [];
+      const outcomes = await Promise.all(batch.map((r) => r.promise));
+      batch.forEach((r, i) => {
+        const outcome = outcomes[i]!;
+        results.push(outcome);
+        pushToolResult(messages, r.call.id, r.call.name, outcome.output);
+      });
+    };
+
+    const recordImmediate = async (call: ToolCall, output: string) => {
+      await flushReads();
+      results.push({ ok: true, output });
+      pushToolResult(messages, call.id, call.name, output);
+    };
+
+    for (const call of callsToRun) {
+      if (submitDefinition && schema && call.name === SUBMIT_RESULT_TOOL_NAME) {
+        if ((msg.toolCalls?.length ?? callsToRun.length) > 1) {
+          await recordImmediate(
+            call,
+            'Result deferred because this turn requested additional tools. ' +
+              'Use their results, then submit the final result in its own turn.'
+          );
+          continue;
+        }
+        const parsed = schema.safeParse(call.arguments);
+        if (!parsed.success) {
+          await recordImmediate(call, `Result rejected: ${z.prettifyError(parsed.error)}`);
+          continue;
+        }
+        const submitted = JSON.stringify(parsed.data);
+        reviewerFeedback = await this.reviewFeedback(messages, submitted, attempt);
+        if (!reviewerFeedback) return { finalAnswer: submitted };
+        await recordImmediate(call, `Result rejected: ${reviewerFeedback}`);
+        continue;
+      }
+
+      const kind = attempt.tools.get(call.name)?.kind;
+      // Unknown tools fail fast; they go the sequential way like a write.
+      if (kind && kind !== 'write') {
+        const promise = this.runToolCall(call, attempt);
+        pendingReads.push({ call, promise });
+        continue;
+      }
+
+      await flushReads();
+
+      // When recovering from a crash during tool execution (`step_assistant`,
+      // as opposed to an `interrupt` where the write was paused before running),
+      // never blindly repeat a write whose side effect may already have occurred.
+      if (recoveryKind === 'step_assistant' && kind === 'write') {
+        attempt.emit({
+          type: 'tool_start',
+          id: call.id,
+          name: call.name,
+          kind,
+          args: call.arguments,
+        });
+        const outcome = failed(
+          'Process terminated while this write tool was running; state may have changed. Verify before retrying.'
+        );
+        attempt.emit({ type: 'tool_end', id: call.id, name: call.name, durationMs: 0, ...outcome });
+        results.push(outcome);
+        pushToolResult(messages, call.id, call.name, outcome.output);
+        continue;
+      }
+
+      const output = await this.runToolCall(call, attempt);
+      results.push(output);
+      pushToolResult(messages, call.id, call.name, output.output);
+    }
+
+    await flushReads();
+    if (reviewerFeedback) messages.push({ role: 'system', content: reviewerFeedback });
+    await this.reportStep('tools', messages, attempt);
+
+    const allCalls = msg.toolCalls ?? callsToRun;
+    const done =
+      allCalls.every((call) => attempt.tools.get(call.name)?.kind === 'display') &&
+      results.some((r) => r.done);
+    if (done && !schema) {
+      const answer = msg.content.trim();
+      const feedback = await this.reviewFeedback(messages, answer, attempt);
+      if (!feedback) return { finalAnswer: answer };
+      messages.push({ role: 'system', content: feedback });
+    }
+    return {};
   }
 
   /** Run one tool call, reporting its start and end. Resolves to its outcome. */
@@ -717,6 +836,9 @@ export class Agent {
           // is the only ordering that means anything.
           if (reachesWorld(tool.kind) && this.requiresApproval(tool)) {
             const gate = attempt.approve ?? currentToolGate();
+            if (gate) {
+              await this.reportStep('interrupt', attempt.messages, attempt);
+            }
             const verdict = await gate?.({
               tool: name,
               toolCallId: id,
@@ -916,4 +1038,28 @@ function failed(message: string): ToolOutcome {
 
 function pushToolResult(messages: ChatMessage[], id: string, name: string, content: string): void {
   messages.push({ role: 'tool', toolCallId: id, toolName: name, content, screened: true });
+}
+
+/**
+ * Inspect the tail of a transcript for an assistant turn whose tool calls have
+ * not all received `role: 'tool'` results yet (e.g., when resuming from a
+ * `step_assistant` or `interrupt` checkpoint).
+ */
+function findPendingToolBatch(
+  messages: readonly ChatMessage[]
+): { assistantMessage: ChatMessage; remainingCalls: ToolCall[] } | undefined {
+  const answeredIds = new Set<string>();
+  let idx = messages.length - 1;
+  while (idx >= 0 && messages[idx]!.role === 'tool') {
+    const toolCallId = messages[idx]!.toolCallId;
+    if (toolCallId) answeredIds.add(toolCallId);
+    idx--;
+  }
+  const candidate = idx >= 0 ? messages[idx] : undefined;
+  if (!candidate || candidate.role !== 'assistant' || !candidate.toolCalls?.length) {
+    return undefined;
+  }
+  const remainingCalls = candidate.toolCalls.filter((call) => !answeredIds.has(call.id));
+  if (!remainingCalls.length) return undefined;
+  return { assistantMessage: candidate, remainingCalls };
 }

@@ -224,7 +224,7 @@ function AppContent() {
         }
         harness
           .resumeSession(arg || undefined, { canSpawn: true })
-          .then(({ session: resumed, summary, isRemote }) => {
+          .then(({ session: resumed, summary, isRemote, hasIncompleteTurn, checkpointKind }) => {
             if (session !== resumed) session.close();
             setSession(resumed);
             const thread = applyEvent([], {
@@ -234,11 +234,15 @@ function AppContent() {
             const originNote = isRemote
               ? `from remote device ${summary.lastDeviceName}`
               : `on ${summary.lastDeviceName}`;
-            const noticeText = `Resumed session ${summary.id.slice(0, 8)} ("${summary.title}") ${originNote}.`;
+            const stepNote = hasIncompleteTurn ? ` (continuing from ${checkpointKind})` : '';
+            const noticeText = `Resumed session ${summary.id.slice(0, 8)} ("${summary.title}") ${originNote}${stepNote}.`;
             setChat({
               thread,
               notices: [{ id: crypto.randomUUID(), text: noticeText, at: thread.length }],
             });
+            if (hasIncompleteTurn) {
+              runTurn((options) => resumed.continueTurn(options));
+            }
           })
           .catch((error) => {
             addSystemMessage(describeRunError(error));

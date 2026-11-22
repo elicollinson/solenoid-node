@@ -140,11 +140,16 @@ export function applyEvent(thread: readonly Message[], event: AGUIEvent): Messag
         type: 'function' as const,
         function: { name: event.toolCallName, arguments: '' },
       };
+      const existingCallerIdx = callerIndex(thread, event.toolCallId);
+      if (existingCallerIdx !== -1) {
+        return mapToolCall(thread, event.toolCallId, () => call);
+      }
       const parentId = event.parentMessageId ?? event.toolCallId;
       return upsert(thread, parentId, (existing) => {
         const parent: AssistantMessage =
           existing?.role === 'assistant' ? existing : { id: parentId, role: 'assistant' };
-        return { ...parent, toolCalls: [...(parent.toolCalls ?? []), call] };
+        const without = (parent.toolCalls ?? []).filter((c) => c.id !== call.id);
+        return { ...parent, toolCalls: [...without, call] };
       });
     }
 

@@ -36,7 +36,12 @@ import {
 import { McpManager } from '../mcp/index.js';
 import { builtinTools } from '../tools/index.js';
 import { agentLogger } from '../utils/logger.js';
-import { type CheckpointStore, type SessionSummary, createCheckpointStore } from './checkpoints.js';
+import {
+  type CheckpointKind,
+  type CheckpointStore,
+  type SessionSummary,
+  createCheckpointStore,
+} from './checkpoints.js';
 import { type PermissionRules, resolvePermission, withPermissions } from './permissions.js';
 import { type AgentProfile, profilePermissions, profileTools } from './profile.js';
 import {
@@ -46,7 +51,12 @@ import {
   SUMMARIZER_PROMPT,
   withToday,
 } from './prompt.js';
-import { Session, type SessionCheckpointer, declineUnattended } from './session.js';
+import {
+  type IncompleteCheckpointState,
+  Session,
+  type SessionCheckpointer,
+  declineUnattended,
+} from './session.js';
 import { SubagentManager } from './subagents.js';
 
 /** LM Studio accepts any key when authentication is off; the SDK requires one. */
@@ -160,6 +170,10 @@ export interface ResumedSession {
   summary: SessionSummary;
   /** True when the session's last checkpoint was written on a different device. */
   isRemote: boolean;
+  /** True when the session stopped mid-turn and can be continued with `session.continueTurn()`. */
+  hasIncompleteTurn: boolean;
+  /** The checkpoint kind the session was restored from. */
+  checkpointKind: CheckpointKind;
 }
 
 export interface ListedSession extends SessionSummary {
@@ -274,6 +288,7 @@ export async function createHarness(
       threadId: string;
       transcript: readonly ChatMessage[];
       thread: readonly Message[];
+      checkpoint?: IncompleteCheckpointState;
     }
   ): Session => {
     const threadId = restored?.threadId ?? crypto.randomUUID();
@@ -311,6 +326,7 @@ export async function createHarness(
       threadId,
       initialTranscript: restored?.transcript,
       initialThread: restored?.thread,
+      initialCheckpoint: restored?.checkpoint,
       checkpoint: checkpointerFor(threadId),
       approve: profile.approve,
       policy,
@@ -341,11 +357,18 @@ export async function createHarness(
       threadId: loaded.session.id,
       transcript: loaded.checkpoint.transcript,
       thread: loaded.checkpoint.thread,
+      checkpoint: {
+        kind: loaded.checkpoint.kind,
+        committed: loaded.checkpoint.committed,
+        turnStartSeq: loaded.checkpoint.turnStartSeq,
+      },
     });
     return {
       session,
       summary: loaded.session,
       isRemote: loaded.session.lastDeviceId !== settings.device.id,
+      hasIncompleteTurn: session.hasIncompleteTurn,
+      checkpointKind: loaded.checkpoint.kind,
     };
   };
 
