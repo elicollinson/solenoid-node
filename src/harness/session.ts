@@ -306,11 +306,14 @@ export class Session {
       thread: () => this.thread,
     };
     // Saved where the turn starts and however it ends, after the stream has
-    // reported the end, so a resumed thread holds the whole turn.
+    // reported the end, so a resumed thread holds the whole turn. A turn that
+    // never opened (the client's handler threw on an opening event) saves nothing.
+    let opened = false;
     let turnStart: SavedCheckpointMeta | undefined;
     let ended: SessionStatus = 'idle';
     try {
       return await encodeTurn(this.threadId, sink, { text, role }, async (encoder) => {
+        opened = true;
         turnStart = await this.saveCheckpoint({
           status: 'running',
           kind: 'turn_start',
@@ -339,13 +342,15 @@ export class Session {
       if (!(error instanceof AgentAbortedError)) ended = 'failed';
       throw error;
     } finally {
-      await this.saveCheckpoint({
-        status: ended,
-        kind: 'turn_end',
-        turnStartSeq: turnStart?.turnStartSeq,
-        transcript: this.transcript,
-        thread: this.thread,
-      });
+      if (opened) {
+        await this.saveCheckpoint({
+          status: ended,
+          kind: 'turn_end',
+          turnStartSeq: turnStart?.turnStartSeq,
+          transcript: this.transcript,
+          thread: this.thread,
+        });
+      }
     }
   }
 
