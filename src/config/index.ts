@@ -1,3 +1,4 @@
+export * from './device.js';
 export * from './schema.js';
 export * from './settings.js';
 export * from './validator.js';

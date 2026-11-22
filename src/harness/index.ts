@@ -6,6 +6,7 @@
  */
 export * from './ag-ui/encoder.js';
 export * from './ag-ui/reducer.js';
+export * from './checkpoints.js';
 export * from './factory.js';
 export * from './messages.js';
 export * from './permissions.js';
