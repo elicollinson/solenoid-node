@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { authoredText } from '@elicollinson/solenoid-security';
+import { z } from 'zod';
 import { AppSettingsSchema } from '../../src/config/index.js';
 import {
   type Harness,
@@ -11,7 +12,9 @@ import {
   defineProfile,
   profileTools,
 } from '../../src/harness/index.js';
-import { toolNames as names, readTool as tool } from '../helpers/tools.js';
+import { fakeModelServer } from '../helpers/fake-model-server.js';
+import { call } from '../helpers/scripted-provider.js';
+import { toolNames as names, readTool as tool, writeTool } from '../helpers/tools.js';
 
 const base = [tool('read_webpage'), tool('render_chart')];
 
@@ -86,5 +89,39 @@ describe('Harness.createSession with a profile', () => {
     expect(() => harness?.createSession({ tools: [tool('render_chart')] })).toThrow(
       'Agent tool "render_chart" is already registered'
     );
+  });
+});
+
+describe('Harness.runStructured', () => {
+  test('returns the validated object from an agent of the profile, declining writes nobody answers', async () => {
+    // Tries the write first, then submits once it has been told no.
+    const server = fakeModelServer((request) =>
+      request.messages.at(-1)?.role === 'tool'
+        ? call('submit_result', { sent: false })
+        : call('mail_send', {})
+    );
+    const harness = await createHarness(
+      AppSettingsSchema.parse({
+        screening: { enabled: false },
+        providers: { lmstudio: { base_url: server.baseUrl } },
+        routes: [{ provider: 'lmstudio', model: 'scripted' }],
+      })
+    );
+    try {
+      const result = await harness.runStructured('Send it.', z.object({ sent: z.boolean() }), {
+        profile: { tools: [writeTool('mail_send')] },
+      });
+
+      expect(result).toEqual({ sent: false });
+      expect(server.requests[0]?.tools).toEqual(
+        expect.arrayContaining(['mail_send', 'submit_result'])
+      );
+      const told = server.requests[1]?.messages.at(-1)?.content ?? '';
+      expect(told).toContain('NOTHING WAS DONE');
+      expect(told).not.toContain('mail_send ran');
+    } finally {
+      await harness.close();
+      server.stop();
+    }
   });
 });

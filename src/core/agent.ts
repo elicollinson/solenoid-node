@@ -639,6 +639,7 @@ export class Agent {
           durationMs,
           error: result.error,
           quarantined: result.quarantined,
+          malformed: result.malformed,
           args: truncate(safeJson(call.arguments), MAX_ECHOED_ARGS_CHARS),
         },
         '[tool] call failed'
@@ -687,7 +688,7 @@ export class Agent {
   private async invokeTool(call: ToolCall, attempt: Attempt): Promise<ToolOutcome> {
     const { id, name, arguments: rawArgs } = call;
     const tool = attempt.tools.get(name);
-    if (!tool) return failed(`unknown tool "${name}"`);
+    if (!tool) return { ...failed(`unknown tool "${name}"`), malformed: true };
 
     return withSpanKind(
       'TOOL',
@@ -706,7 +707,7 @@ export class Agent {
           const parsed = tool.schema.safeParse(rawArgs);
           if (!parsed.success) {
             span.setStatus({ code: SpanStatusCode.ERROR });
-            return failed(argumentError(rawArgs, parsed.error));
+            return { ...failed(argumentError(rawArgs, parsed.error)), malformed: true };
           }
           const args = parsed.data;
           if (span.isRecording())

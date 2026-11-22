@@ -84,7 +84,7 @@ Terminal UI (src/ui)            CLI --run (src/cli-runner.ts)
 |-------|-------|
 | A turn | `RUN_STARTED` … `RUN_FINISHED`; each model call is a `STEP` |
 | Text, reasoning | `TEXT_MESSAGE_*`, `REASONING_*` |
-| A tool call | `TOOL_CALL_START/ARGS/END`, then `TOOL_CALL_RESULT` with `error`, `quarantined` or `declined` in `metadata.solenoid`; a run that ends first answers its open calls as `not run` |
+| A tool call | `TOOL_CALL_START/ARGS/END`, then `TOOL_CALL_RESULT` with `error`, `quarantined`, `declined` or `malformed` in `metadata.solenoid`; a run that ends first answers its open calls as `not run` |
 | A chart | `ACTIVITY_SNAPSHOT` with `activityType: "solenoid.chart"`; content validated by the schema in `src/display` |
 | A write waiting for approval | `RUN_FINISHED` with an `interrupt` outcome; `session.resume([{ interruptId, status: "resolved", payload: { approved } }])` continues it in a new run |
 | A retry or a route change | `CUSTOM` (`solenoid.retry`, `solenoid.route_advanced`), then `MESSAGES_SNAPSHOT` without the discarded output |
@@ -101,7 +101,7 @@ The core streams its own `AgentEvent`s (`turn_start`, `text_delta`, `reasoning_d
 - **Display tools are for the person.** A `display` tool (`render_chart`) sends its content to the UI and tells the model only that it was shown. Every display call carries a required `done` flag: the model says when a chart completes its answer, and a turn of display calls that says so ends the run. Content identical to something already shown in the run is not drawn twice.
 - **A turn limit.** `agent.max_turns` (default 25) bounds model calls per attempt; the last is offered no tools.
 - **Route fallback is never a replay of a change.** Once a write tool has run, the attempt is not retried on another route. An interrupt and an injection verdict also end the run immediately.
-- **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback.
+- **Structured output:** `agent.runStructured(prompt, zodSchema)` adds a `submit_result` tool and validates the result against the schema, with repair feedback. `harness.runStructured(prompt, zodSchema, { profile })` does the same from a profile, as one run with no conversation: the approval rules answer its writes, and what they leave at ask is declined unless the profile has an `approve`. Its `onEvent` gets the run as AG-UI events, like a session's.
 
 ### Agent profiles
 
@@ -282,6 +282,7 @@ src/
 ├── display/                 # Display components: the chart schema and parser
 ├── telemetry/               # Optional W&B Weave export
 └── ui/                      # Ink app, components, test harness
+evals/                       # Model evals: cases, fixture worlds, runner, report
 ```
 
 ## Development
@@ -295,10 +296,65 @@ src/
 | `bun run typecheck` | TypeScript type checking |
 | `bun run lint` | Lint with Biome |
 | `bun run scripts/live-core-smoke.ts` | Two-turn tool conversation on each live backend |
+| `bun run eval --model <provider:model>` | Run the model evals (see [Evals](#evals)) |
 
 The Ink UI is compiled with [React Compiler](https://react.dev/learn/react-compiler), so components carry no manual `useMemo`, `useCallback` or `memo`. Bun does not run Babel, so `scripts/react-compiler.ts` applies it as a Bun plugin: `bunfig.toml` preloads it for `bun run` and `bun test`, and `scripts/build.ts` uses it for the bundle.
 
 Tracing: set `WANDB_API_KEY` and `WANDB_PROJECT_ID` to export spans to W&B Weave. Structured JSON logs go to `logs/` (agent.log, ui.log, server.log).
+
+## Evals
+
+`evals/` measures how well a model does what the harness asks of it: valid tool calls, recovering from a failed one, staying inside the turn limit, structured output, tool groups, declined writes, subagents, ignoring instructions planted in a tool result, and choosing between acting, asking and doing nothing. It runs real models through the real harness, so it is not part of `bun test` or CI.
+
+```bash
+bun run eval --model lmstudio:google/gemma-4-26b-a4b
+bun run eval --model openrouter:google/gemma-4-26b-a4b-it --model lmstudio:google/gemma-4-26b-a4b --trials 5
+bun run eval --model lmstudio:google/gemma-4-26b-a4b --filter recovery --set agent.think=low
+bun run eval --report evals/runs/<file>.jsonl     # grade a saved run again, no model calls
+```
+
+Each trial gets its own harness with one route and no fallback, screening off, and no search or MCP servers. `--set path=value` changes any setting for the run, for example `--set screening.enabled=true`, or `--set providers.lmstudio.base_url=http://192.168.0.2:1234/v1` to reach LM Studio on another machine. Overrides are saved with each trial and shown in the report, so `--set` refuses API keys: those come from the environment. Sampling cannot be pinned, so every case runs `--trials` times (default 3) and is reported as a rate. Running the same command with the same `--out` resumes a stopped run. A trial the model server fails (unreachable, no model loaded, gone quiet) says nothing about the model: it is not saved, the run exits non-zero, and the same command runs it again. A turn the model is still answering after ten minutes is cut off and its trial saved as failed; `--limit <seconds>` changes that for a fast model or a busy server.
+
+The report has four parts: trials passed by feature, the pass rate at each size of every limit sweep with the size the model holds to, average cost per trial (model calls, failed and malformed tool calls, tokens, seconds), and the failing cases with the checks they failed. "Over best" is how many more model calls a passing trial made than the fewest any passing trial of that case took: wasted work, which unlike seconds does not depend on what else the server is doing.
+
+A case tells models apart only when some trials pass and some fail. The report counts the fixed cases every trial passed and names any that none passed, which is more often a broken case than a weak model. To spend trials where they inform, run more of the cases in between: the same `--out` with a `--filter` and a higher `--trials` adds to the run.
+
+`evals/baselines/` holds two saved runs to set a new model or a harness change beside. Both ran on LM Studio, three trials a case, in November 2026:
+
+| file | model | context | cases |
+| --- | --- | --- | --- |
+| `inkling-2-mini-gguf-q8.jsonl` | `lmstudio-community/inkling-2-mini`, GGUF Q8_0 | 131,072 | all 56 |
+| `qwen3.5-9b-mlx-8bit.jsonl` | `qwen/qwen3.5-9b`, MLX 8-bit | 262,144 | the 44 that existed when it ran |
+
+A run does not record the server's side of its condition (quantization, context length, machine), so note those when saving a baseline. Each file is a run's JSONL without the conversation threads, which grading does not read. Join them with a run of your own to see all three in one report:
+
+```bash
+cat evals/baselines/*.jsonl evals/runs/<file>.jsonl > evals/runs/compared.jsonl
+bun run eval --report evals/runs/compared.jsonl
+```
+
+Every trial is saved to `evals/runs/` (gitignored) with its full conversation and the fixture's final state, and graded when the report is printed. Changing a check or adding a metric therefore needs no new model calls.
+
+### Adding a case
+
+A case is a fixture world, an agent profile, the person's messages and checks. One file per feature in `evals/cases/`, picked up by name:
+
+```ts
+defineCase({
+  id: 'recovery/corrects-a-refused-argument',   // feature/what-it-asks
+  world: tickets,                               // evals/worlds: fresh state and tools per trial
+  profile: (world) => ({ tools: world.tools }), // any AgentProfile; this is the default
+  turns: ['What is the priority of ticket 17?'],
+  checks: [called('get_ticket', { id: 'T-17' }), noRepeatedFailedCall(), answered(/urgent/i)],
+});
+```
+
+- A new harness feature is evaluated through the profile or `settings` field it already has; the runner does not change.
+- `schema` makes a case one structured run. `approve: 'deny'` declines its writes. `sweep(id, sizes, make)` runs one template at several sizes: turn one dial and keep the task easy, so the size it breaks at is a fact about that dial.
+- Give a case a `reference`: the model's replies in one run that passes, written with `say` and `call`. `bun test` plays it back, which proves the case can be passed and that its checks accept a right answer.
+- Where a case asks for restraint, add its twin where acting is right (`evals/cases/decisions.ts`).
+- Shared checks are in `evals/checks.ts`; a one-off is an inline `{ name, pass }`. Checks read a trajectory and never run anything.
+- `tests/evals/evals.test.ts` opens every case against the current harness, so a refactor that breaks a case fails `bun test`. It also runs every case on a model that does nothing, which must fail.
 
 ## License
 

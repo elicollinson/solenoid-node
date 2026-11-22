@@ -28,7 +28,7 @@ import {
   type ApprovalRequest,
   type ChatMessage,
 } from '../core/index.js';
-import { TurnEncoder } from './ag-ui/encoder.js';
+import { type EncoderSink, TurnEncoder } from './ag-ui/encoder.js';
 import { applyEvent } from './ag-ui/reducer.js';
 import { declinedMessage, describeRunError } from './messages.js';
 
@@ -119,6 +119,33 @@ export function approvalAnswer(
   return answer === 'unattended'
     ? { interruptId, status: 'cancelled' }
     : { interruptId, status: 'resolved', payload: { approved: answer === 'allow' } };
+}
+
+/**
+ * One agent run as an AG-UI turn: open it with `opening`, hand `run` the
+ * encoder to feed the agent's events to, and end the stream the way the run
+ * ended (answered, stopped or failed). The run's error is rethrown once the
+ * stream has reported it.
+ */
+export async function encodeTurn<T>(
+  threadId: string,
+  sink: EncoderSink,
+  opening: { text: string; role: OpeningRole },
+  run: (encoder: TurnEncoder) => Promise<T>
+): Promise<T> {
+  const encoder = new TurnEncoder(threadId, sink);
+  // Synchronous up to the run's first await, so a client draws the opening
+  // message the moment the turn is asked for.
+  encoder.startTurn({ id: crypto.randomUUID(), ...opening });
+  try {
+    const result = await run(encoder);
+    encoder.complete();
+    return result;
+  } catch (error) {
+    if (error instanceof AgentAbortedError) encoder.cancel();
+    else encoder.fail(describeRunError(error), (error as { code?: string }).code);
+    throw error;
+  }
 }
 
 export class Session {
@@ -234,37 +261,32 @@ export class Session {
       const at = messages.findLastIndex((m) => m.role === 'user' && m.content === sent.content);
       return messages.map((m, i) => (i === at ? { ...m, content: text } : m));
     };
-    const encoder = new TurnEncoder(this.threadId, {
+    const sink: EncoderSink = {
       emit: (event) => {
         this.thread = applyEvent(this.thread, event);
         onEvent(event);
       },
       thread: () => this.thread,
+    };
+    return encodeTurn(this.threadId, sink, { text, role }, async (encoder) => {
+      const ask: ApprovalHandler =
+        this.options.approve ?? ((request) => this.interrupt(request, encoder));
+      try {
+        const result = await this.agent.runMessages([...this.transcript, sent], {
+          signal,
+          onEvent: (event) => encoder.handle(event),
+          approve: this.options.policy?.(ask) ?? ask,
+        });
+        this.transcript = kept(result.messages);
+        return result.output;
+      } catch (error) {
+        // The turn's work is lost, but what was asked is kept so a follow-up
+        // ("try again", "continue") still has its context. It is not marked
+        // screened, so the next turn screens it again.
+        this.transcript = [...this.transcript, user];
+        throw error;
+      }
     });
-
-    // Synchronous up to the agent's first await, so a client draws the
-    // person's message the moment it calls send.
-    encoder.startTurn({ id: crypto.randomUUID(), text, role });
-    const ask: ApprovalHandler =
-      this.options.approve ?? ((request) => this.interrupt(request, encoder));
-    try {
-      const result = await this.agent.runMessages([...this.transcript, sent], {
-        signal,
-        onEvent: (event) => encoder.handle(event),
-        approve: this.options.policy?.(ask) ?? ask,
-      });
-      this.transcript = kept(result.messages);
-      encoder.complete();
-      return result.output;
-    } catch (error) {
-      // The turn's work is lost, but what was asked is kept so a follow-up
-      // ("try again", "continue") still has its context. It is not marked
-      // screened, so the next turn screens it again.
-      this.transcript = [...this.transcript, user];
-      if (error instanceof AgentAbortedError) encoder.cancel();
-      else encoder.fail(describeRunError(error), (error as { code?: string }).code);
-      throw error;
-    }
   }
 
   /** Answer interrupts the last run ended on. Each opens the run that continues it. */

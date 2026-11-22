@@ -189,6 +189,7 @@ export class TurnEncoder {
           ...(event.error ? { error: event.error } : {}),
           ...(event.quarantined ? { quarantined: true } : {}),
           ...(event.declined ? { declined: true } : {}),
+          ...(event.malformed ? { malformed: true } : {}),
         };
         this.emit({
           type: EventType.TOOL_CALL_RESULT,
