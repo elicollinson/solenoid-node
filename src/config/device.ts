@@ -52,21 +52,36 @@ const GENERIC_HOSTNAMES = new Set([
   'windows',
 ]);
 
+const LOCAL_DOMAIN_SUFFIXES = [
+  '.local',
+  '.lan',
+  '.home',
+  '.internal',
+  '.localdomain',
+  '.corp',
+  '.attlocal.net',
+] as const;
+
 /**
  * Turn an OS hostname into a clean slug, or generate a readable fallback when
  * the hostname is generic or looks like a container ID.
  */
 export function deriveDeviceName(rawHostname: string = safeHostname(), seed?: string): string {
-  const stripped = rawHostname
-    .trim()
-    .replace(/\.(local|lan|home|internal|localdomain|corp|attlocal\.net)$/i, '')
-    .toLowerCase();
+  let stripped = rawHostname.trim().toLowerCase();
+  for (const suffix of LOCAL_DOMAIN_SUFFIXES) {
+    if (stripped.endsWith(suffix)) {
+      stripped = stripped.slice(0, -suffix.length);
+      break;
+    }
+  }
 
-  const slug = stripped
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48)
-    .replace(/-+$/g, '');
+  const joined = stripped
+    .slice(0, 128)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join('-')
+    .slice(0, 48);
+  const slug = joined.endsWith('-') ? joined.slice(0, -1) : joined;
 
   // Container IDs (12 or 64 hex chars) and generic hostnames get a friendly generated name.
   const isHexContainerId = /^[0-9a-f]{12}$|^[0-9a-f]{64}$/.test(slug);

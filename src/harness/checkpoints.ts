@@ -643,6 +643,12 @@ function supabaseRowToCheckpoint(row: SupabaseCheckpointRow): CheckpointRecord {
   };
 }
 
+function trimTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end--;
+  return url.slice(0, end);
+}
+
 export class SupabaseCheckpointStore implements CheckpointStore {
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -651,7 +657,7 @@ export class SupabaseCheckpointStore implements CheckpointStore {
   private readonly fetchFn: typeof fetch;
 
   constructor(credentials: SupabaseCredentials, options: { fetchFn?: typeof fetch } = {}) {
-    this.baseUrl = credentials.url.replace(/\/+$/, '');
+    this.baseUrl = trimTrailingSlashes(credentials.url);
     this.apiKey = credentials.apiKey;
     const prefix = credentials.tablePrefix ?? 'solenoid_';
     this.sessionsTable = `${prefix}sessions`;

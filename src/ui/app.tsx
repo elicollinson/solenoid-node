@@ -210,7 +210,7 @@ function AppContent() {
               const current = s.id === session.threadId ? ' [current]' : '';
               return `  ${s.id.slice(0, 8)}  ${s.title} (${s.status}) · ${where}${current}`;
             });
-            addSystemMessage(`Saved sessions (use /resume <id> to continue):\n${lines.join('\n')}`);
+            addSystemMessage(`Saved sessions (use /resume [id] to continue):\n${lines.join('\n')}`);
           })
           .catch((error) => {
             addSystemMessage(describeRunError(error));
