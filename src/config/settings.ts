@@ -170,6 +170,7 @@ export function saveSettings(settings: Record<string, unknown>): void {
 export const PROVIDER_KEY_ENV: Record<ProviderName, string> = {
   lmstudio: 'LMSTUDIO_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  omlx: 'OMLX_API_KEY',
 };
 
 /**

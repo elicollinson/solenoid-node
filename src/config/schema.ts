@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { deriveDeviceName } from './device.js';
 
-export const PROVIDER_NAMES = ['lmstudio', 'openrouter'] as const;
+export const PROVIDER_NAMES = ['lmstudio', 'openrouter', 'omlx'] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 export const DEFAULT_LMSTUDIO_MODEL = 'google/gemma-4-26b-a4b';
@@ -38,7 +38,7 @@ export const StallConfigSchema = z
 
 export const ProviderConfigSchema = z.object({
   base_url: z.url(),
-  /** Overridden by LMSTUDIO_API_KEY / OPENROUTER_API_KEY when set. */
+  /** Overridden by LMSTUDIO_API_KEY / OPENROUTER_API_KEY / OMLX_API_KEY when set. */
   api_key: z.string().optional(),
   stall: StallConfigSchema,
 });
@@ -47,6 +47,8 @@ export const ProvidersConfigSchema = z
   .object({
     lmstudio: ProviderConfigSchema.prefault({ base_url: 'http://localhost:1234/v1' }),
     openrouter: ProviderConfigSchema.prefault({ base_url: 'https://openrouter.ai/api/v1' }),
+    /** oMLX, an MLX server for Apple silicon: its address on the machine it runs on. */
+    omlx: ProviderConfigSchema.prefault({ base_url: 'http://localhost:8000/v1' }),
   })
   .prefault({});
 
