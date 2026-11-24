@@ -14,6 +14,10 @@ export default [
     turns: [
       'Use two subagents: one to look up how many widgets are in stock, one for gears. Then tell me both numbers.',
     ],
-    checks: [callCount('spawn_subagent', { min: 2, max: 2 }), answered(/130/), answered(/45/)],
+    checks: [
+      callCount('spawn_subagent', { min: 2, max: 2 }),
+      answered(/\b130\b/),
+      answered(/\b45\b/),
+    ],
   }),
 ];

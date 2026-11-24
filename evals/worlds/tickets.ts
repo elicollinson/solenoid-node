@@ -139,7 +139,7 @@ export const closedOnly = (state: TicketsState, ...ids: string[]): boolean =>
     .join();
 
 /** The tickets still open, for checks on what a run changed. */
-export const openTickets = (state: TicketsState): string[] =>
+const openTickets = (state: TicketsState): string[] =>
   Object.values(state.tickets)
     .filter((ticket) => ticket.status === 'open')
     .map((ticket) => ticket.id);

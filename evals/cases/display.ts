@@ -3,7 +3,7 @@
  * redrawing what it cannot see.
  */
 import { defineCase } from '../case.js';
-import { called } from '../checks.js';
+import { called, charts } from '../checks.js';
 import { warehouse } from '../worlds/warehouse.js';
 
 export default [
@@ -17,6 +17,10 @@ export default [
         // A refused attempt drew nothing, so only charts that were shown count.
         name: 'drew one chart',
         pass: (t) => t.toolCalls.filter((c) => c.name === 'render_chart' && c.ok).length === 1,
+      },
+      {
+        name: 'the chart shows 130, 45 and 900',
+        pass: (t) => [130, 45, 900].every((n) => new RegExp(`\\b${n}\\b`).test(charts(t))),
       },
     ],
   }),

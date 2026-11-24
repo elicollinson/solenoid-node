@@ -7,6 +7,7 @@
  */
 import type { Message } from '@ag-ui/core';
 import { type EvalCase, type Trajectory, featureOf } from './case.js';
+import { noLeakedCall } from './checks.js';
 
 /** One trial as saved: a line of a run's JSONL file. */
 export interface TrialRecord {
@@ -20,6 +21,8 @@ export interface TrialRecord {
   /** The run's settings overrides (`--set`). With the model, the condition under test. */
   settings: Record<string, unknown>;
   trial: number;
+  /** Seconds a turn was allowed before it was cut off. Absent on trials saved before it was recorded. */
+  limit?: number;
   trajectory: Trajectory;
   /** The conversation as a client holds it: every message, call and result in full. */
   thread: Message[];
@@ -31,9 +34,28 @@ export const conditionOf = (record: Pick<TrialRecord, 'model' | 'settings'>): st
     ? `${record.model} ${JSON.stringify(record.settings)}`
     : record.model;
 
+/** Which trial of a run a record is. Run again under the same key, it is skipped. */
+export const trialKey = (record: Pick<TrialRecord, 'model' | 'settings' | 'case' | 'trial'>) =>
+  `${conditionOf(record)} ${record.case} ${record.trial}`;
+
+/**
+ * Model calls that produced neither a tool call nor an answer, which the
+ * agent loop answers with a silent "continue": every call of a trial either
+ * made tool calls, ended a turn, or was one of these. A trial can pass after
+ * several, so they are counted apart from the grade.
+ * ponytail: derived, since saved trials carry no event for it. A run that
+ * died mid-call is allowed one such call; emit an event if that guess is ever wrong.
+ */
+export function nudges(trajectory: Trajectory): number {
+  const acting = new Set(trajectory.toolCalls.map((call) => call.step)).size;
+  // A structured run ends on submit_result, a turn of its own with no answer text.
+  const ending = trajectory.answers.length || (trajectory.output === undefined ? 0 : 1);
+  return Math.max(0, trajectory.modelCalls - acting - ending - (trajectory.error ? 1 : 0));
+}
+
 /** The names of the checks a trial failed; none means it passed. */
 export function grade(evalCase: EvalCase, trajectory: Trajectory): string[] {
-  const failed = evalCase.checks
+  const failed = [...evalCase.checks, noLeakedCall]
     .filter((check) => {
       try {
         return !check.pass(trajectory);
@@ -51,7 +73,7 @@ const mean = (values: number[]): number =>
 const rate = (passed: boolean[]): string =>
   passed.length ? `${passed.filter(Boolean).length}/${passed.length}` : '-';
 
-function table(headers: string[], rows: string[][]): string {
+export function table(headers: string[], rows: string[][]): string {
   const line = (cells: string[]) => `| ${cells.join(' | ')} |`;
   return [line(headers), line(headers.map(() => '---')), ...rows.map(line)].join('\n');
 }
@@ -164,8 +186,10 @@ export function report(records: TrialRecord[], cases: EvalCase[]): string {
         'tool calls',
         'failed',
         'malformed',
+        'nudged',
         'tokens in',
         'tokens out',
+        'of them reasoning',
         'seconds',
       ],
       [...under].map(([condition, some]) => [
@@ -180,8 +204,10 @@ export function report(records: TrialRecord[], cases: EvalCase[]): string {
         average(some, (t) => t.toolCalls.length),
         average(some, (t) => t.toolCalls.filter((call) => call.error).length, 2),
         average(some, (t) => t.toolCalls.filter((call) => call.malformed).length, 2),
+        average(some, nudges, 2),
         average(some, (t) => t.tokens.input, 0),
         average(some, (t) => t.tokens.output, 0),
+        average(some, (t) => t.tokens.reasoning, 0),
         average(some, (t) => t.durationMs / 1000),
       ])
     )
@@ -195,11 +221,22 @@ export function report(records: TrialRecord[], cases: EvalCase[]): string {
       );
       if (!counts.size) return [];
       const why = [...counts].map(([name, hits]) => `${name} (${hits.length})`).join('; ');
-      return [[condition, id, passes(some), why]];
+      // How far each failing trial got: a run that stops at call 5 of 64 did not fail on length.
+      const reached = some
+        .filter((trial) => !trial.passed)
+        .map((trial) => trial.trajectory.toolCalls.length)
+        .join(', ');
+      return [[condition, id, passes(some), why, reached]];
     })
   );
   if (failing.length) {
-    parts.push('## Failing cases', table(['', 'case', 'passed', 'checks failed'], failing));
+    parts.push(
+      '## Failing cases',
+      table(
+        ['', 'case', 'passed', 'checks failed', 'tool calls made by each failing trial'],
+        failing
+      )
+    );
   }
   return parts.join('\n\n');
 }

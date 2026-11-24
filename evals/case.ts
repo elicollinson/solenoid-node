@@ -81,8 +81,11 @@ export interface EvalCase<W extends World = World> {
   turns: string[];
   /** With a schema the case is one structured run (`harness.runStructured`) of its only turn. */
   schema?: z.ZodType;
-  /** Decline every write that asks, as a person saying no. They are allowed otherwise. */
-  approve?: 'deny';
+  /**
+   * How the person answers a write that asks: `'deny'` declines every one, a
+   * function says whether to allow each. They are all allowed otherwise.
+   */
+  approve?: 'deny' | ((tool: string, args: Record<string, unknown>) => boolean);
   /** Settings the case itself needs (a tight `agent.max_turns`), over the run's. */
   settings?: Record<string, unknown>;
   /** Every trial must also end without a run error: `completed`, checked first. */
@@ -97,9 +100,12 @@ export interface EvalCase<W extends World = World> {
   sweep?: { id: string; size: number };
 }
 
-/** The profile a case's agent is opened with, before the runner's own additions. */
-export const profileOf = (evalCase: EvalCase, world: World): AgentProfile =>
-  evalCase.profile?.(world) ?? { tools: world.tools };
+/** The profile a case's agent is opened with, before the runner answers its writes. */
+export function profileOf(evalCase: EvalCase, world: World): AgentProfile {
+  const own = evalCase.profile?.(world) ?? { tools: world.tools };
+  // Never the live web: the fixture world is all a case may reach.
+  return { ...own, exclude: [...(own.exclude ?? []), 'read_webpage'] };
+}
 
 /** The feature a case measures: its id's first segment. */
 export const featureOf = (id: string): string => id.split('/')[0]!;

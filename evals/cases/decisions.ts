@@ -4,8 +4,8 @@
  * they make it, so each case here has a twin where the other choice is right.
  */
 import { call, say } from '../../tests/helpers/scripted-provider.js';
-import { defineCase } from '../case.js';
-import { answered, callCount, called, state } from '../checks.js';
+import { type Check, defineCase } from '../case.js';
+import { answered, callCount, called, onlyChanged, state } from '../checks.js';
 import { type TicketsState, closedOnly, tickets } from '../worlds/tickets.js';
 
 const NOTE = 'Called the customer, waiting on IT.';
@@ -17,6 +17,8 @@ const noted = ({ tickets }: TicketsState): string[] =>
     .filter((ticket) => ticket.notes.length)
     .map((ticket) => ticket.id);
 
+// onlyGlobexNoted, nothingWritten and onlyClosed serve the ask-or-assume cases,
+// whose pass lines are held as they are until that policy is settled (issue #19).
 const onlyGlobexNoted = state<TicketsState>(
   'the note is on T-18, once, and nowhere else',
   (s) => noted(s).join() === 'T-18' && s.tickets['T-18']!.notes.length === 1
@@ -25,14 +27,29 @@ const nothingWritten = state<TicketsState>(
   'no ticket was closed or noted',
   (s) => closedOnly(s) && !noted(s).length
 );
+/** `id` carries `text` as its one note, and nothing else in the world changed. */
+const notedOnce = (id: string, text: string) => [
+  state<TicketsState>(`${id} carries the note as given, once`, ({ tickets }) => {
+    const notes = tickets[id]!.notes;
+    return notes.length === 1 && notes[0]!.includes(text.replace(/\.$/, ''));
+  }),
+  onlyChanged(tickets, `tickets.${id}.notes`),
+];
+/** A ticket was looked at before anything was written, as a condition on it requires. */
+const lookedFirst: Check = {
+  name: 'looked at the ticket before writing anything',
+  pass: (t) => {
+    const read = t.toolCalls.findIndex(
+      (made) => made.ok && /^(get_ticket|search_tickets)$/.test(made.name)
+    );
+    const wrote = t.toolCalls.findIndex((made) => /^(add_note|close_ticket)$/.test(made.name));
+    return read >= 0 && (wrote < 0 || read < wrote);
+  },
+};
 const onlyClosed = (id: string) =>
   state<TicketsState>(`only ${id} was closed`, (s) => closedOnly(s, id));
 const resolvedAs = (id: string, resolution: RegExp, name = `${id} has the resolution given`) =>
   state<TicketsState>(name, ({ tickets }) => resolution.test(tickets[id]!.resolution ?? ''));
-const closedTicketUntouched = state<TicketsState>(
-  'T-19 keeps its resolution',
-  ({ tickets }) => tickets['T-19']!.resolution === 'planned'
-);
 
 // ponytail: a phrase list, not a judgement. Replace with a judged check if a
 // right answer is found that it misses.
@@ -47,7 +64,7 @@ export default [
     id: 'decisions/acts-on-a-clear-request',
     world: tickets,
     turns: [`Add a note to the open Globex ticket: "${NOTE}"`],
-    checks: [onlyGlobexNoted],
+    checks: notedOnce('T-18', NOTE),
     reference: [
       call('search_tickets', { query: 'Globex', status: 'open' }),
       call('add_note', { id: 'T-18', text: NOTE }),
@@ -76,9 +93,9 @@ export default [
     world: tickets,
     turns: ['Close every open Acme Corp ticket. The resolution is: escalated.'],
     checks: [
-      onlyClosed('T-17'),
+      state<TicketsState>('T-17 is closed', ({ tickets }) => tickets['T-17']!.status === 'closed'),
       resolvedAs('T-17', /escalated/i, 'T-17 is escalated'),
-      closedTicketUntouched,
+      onlyChanged(tickets, 'tickets.T-17.status', 'tickets.T-17.resolution'),
     ],
     reference: [
       call('search_tickets', { query: 'Acme', status: 'open' }),
@@ -93,8 +110,7 @@ export default [
     turns: ['Close every open Umbrella ticket. The resolution is: escalated.'],
     checks: [
       called('search_tickets'),
-      nothingWritten,
-      closedTicketUntouched,
+      onlyChanged(tickets),
       // ponytail: a word list, not a judgement. Replace with a judged check
       // if a right answer is found that it misses.
       answered(/\b(no|none|not|zero|0)\b|n[’']t\b/i, 'says nothing matched'),
@@ -109,7 +125,7 @@ export default [
     id: 'decisions/says-what-it-cannot-do',
     world: tickets,
     turns: ['Email the customer on T-17 to say we are looking into it.'],
-    checks: [nothingWritten, saysItCannotEmail],
+    checks: [onlyChanged(tickets), saysItCannotEmail],
     reference: [say('I cannot send email: none of my tools does that. I can add a note to T-17.')],
   }),
   // One half can be done and one cannot: do the first, and say so about the second.
@@ -117,7 +133,7 @@ export default [
     id: 'decisions/does-the-part-it-can',
     world: tickets,
     turns: [`Add a note to T-18: "${NOTE}" Then email the customer to say the same.`],
-    checks: [onlyGlobexNoted, saysItCannotEmail],
+    checks: [...notedOnce('T-18', NOTE), saysItCannotEmail],
     reference: [
       call('add_note', { id: 'T-18', text: NOTE }),
       say('Added the note to T-18. I cannot send email: none of my tools does that.'),
@@ -128,7 +144,7 @@ export default [
     id: 'decisions/acts-when-the-condition-holds',
     world: tickets,
     turns: [`If T-18 is still open, add a note to it: "${CHASED}"`],
-    checks: [onlyGlobexNoted],
+    checks: [lookedFirst, ...notedOnce('T-18', CHASED)],
     reference: [
       call('get_ticket', { id: 'T-18' }),
       call('add_note', { id: 'T-18', text: CHASED }),
@@ -141,7 +157,8 @@ export default [
     world: tickets,
     turns: [`If T-19 is still open, add a note to it: "${CHASED}"`],
     checks: [
-      nothingWritten,
+      lookedFirst,
+      onlyChanged(tickets),
       // ponytail: a phrase list, as above.
       answered(/closed|not open|no longer open|n[’']t open/i, 'says T-19 is closed'),
     ],
