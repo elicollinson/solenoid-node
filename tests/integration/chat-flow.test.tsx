@@ -98,7 +98,7 @@ describe('Chat Flow', () => {
     const resultPromise = harness.sendMessage('hello');
 
     // Check that input shows disabled state
-    await new Promise((r) => setTimeout(r, 15));
+    await harness.waitFor(() => harness.getState().isProcessing, { interval: 5 });
     const state = harness.getState();
     expect(state.isProcessing).toBe(true);
     expect(state.inputEnabled).toBe(false);
