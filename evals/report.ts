@@ -91,7 +91,9 @@ export function report(
   const trials = records.flatMap((record) => {
     const evalCase = byId.get(record.case);
     if (!evalCase) return [];
-    const failed = [...grade(evalCase, record.trajectory), ...more(record)];
+    // Only a trial that passes its checks can be failed for more.
+    const checks = grade(evalCase, record.trajectory);
+    const failed = checks.length ? checks : more(record);
     return [
       { ...record, evalCase, condition: conditionOf(record), failed, passed: !failed.length },
     ];

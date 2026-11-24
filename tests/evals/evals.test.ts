@@ -6,7 +6,7 @@
  * from rotting when the harness changes under it.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -26,13 +26,21 @@ import {
   QUESTIONS,
   type Review,
   flips,
+  judgeFile,
   judgeReport,
   judgeRun,
+  labelFile,
+  labelReport,
+  packetDir,
   readJudged,
+  readLabels,
   readReviewed,
+  reviewFile,
   reviewRun,
   show,
+  takeLabels,
   verified,
+  writePackets,
 } from '../../evals/judge.js';
 import { type TrialRecord, grade, nudges, report } from '../../evals/report.js';
 import { loadCases, runTrial } from '../../evals/run.js';
@@ -531,8 +539,10 @@ describe('judge', () => {
     expect(seen.join()).not.toContain('four questions');
 
     const reviewed = readReviewed(file);
-    expect(flips(judged, reviewed)(passing)).toEqual(['judge flip: told']);
     expect(report([passing], [noting], flips(judged, reviewed))).toContain('judge flip: told (1)');
+    // A trial that fails its checks is failed for those alone.
+    const failing = { ...passing, trajectory: { ...passing.trajectory, toolCalls: [] } };
+    expect(report([failing], [noting], () => ['judge flip: told'])).not.toContain('judge flip');
     const text = judgeReport([passing], [noting], judged, reviewed);
     expect(text).toContain('| lmstudio:scripted | 1/1 | 1 | 0/1 | 1 | 0 | 0 | 0 | 0 |');
     expect(text).toContain(
@@ -540,5 +550,81 @@ describe('judge', () => {
     );
     expect(text).toContain('| No such call. | stands |');
     expect(text).toContain('| No such call. | stands: no quote found |');
+  });
+
+  test('writes trials out for labelling without what the judge said, and sets both against the labels', async () => {
+    const run = join(mkdtempSync(join(tmpdir(), 'labels-')), 'run.jsonl');
+    const first = await noted();
+    const records = [
+      first,
+      { ...first, trial: 2, at: '2026-11-24T00:00:00.000Z' },
+      { ...first, trial: 3, at: '2026-11-25T00:00:00.000Z' },
+    ];
+    // The judge questions the first two trials and passes the third; the reviewer fails only the first.
+    const raise = { told: yes('emailed the customer'), wrote: no, claimed: no, reason: no };
+    let judgings = 0;
+    await judgeRun(records, [noting], judgeFile(run), async () => ({
+      answer: judgings++ < 2 ? raise : { ...raise, told: no },
+    }));
+    const judged = readJudged(judgeFile(run));
+    let reviews = 0;
+    await reviewRun(records, [noting], judged, reviewFile(run), async () => ({
+      answer: reviews++ ? no : yes('emailed the customer'),
+    }));
+    const reviewed = readReviewed(reviewFile(run));
+
+    // Both questioned trials, and one of the one the judge passed.
+    expect(writePackets(records, [noting], judged, packetDir(run), 1)).toEqual({
+      written: 3,
+      left: 0,
+    });
+    const packets = readdirSync(packetDir(run));
+    const packet = readFileSync(join(packetDir(run), packets[0]!), 'utf8');
+    expect(packet).toContain('[agent calls add_note]');
+    expect(packet).toContain(QUESTIONS.claimed);
+    expect(packet).toContain('"confidence": "clear or borderline"');
+    expect(packet).not.toContain('No such call.');
+
+    // The labeller fails all three, so the reviewer missed one and the judge another.
+    const sure = { confidence: 'clear' };
+    const label = { told: { ...yes('emailed the customer'), ...sure }, wrote: { ...no, ...sure } };
+    const answers = packets.map((name) => join(packetDir(run), name.replace('.md', '.json')));
+    for (const answer of answers) {
+      writeFileSync(
+        answer,
+        JSON.stringify({ ...label, claimed: label.wrote, reason: label.wrote })
+      );
+    }
+    const take = () => takeLabels(records, [noting], packetDir(run), labelFile(run), 'a person');
+    expect(take()).toEqual({ taken: 3, problems: [] });
+    const text = labelReport(records, [noting], judged, reviewed, readLabels(labelFile(run)));
+    expect(text).toContain(
+      '| lmstudio:scripted | 3 | 3 | 1 | 1 | 0 | 1 | 1 of 1 labelled (1 in all) | 1/2 |'
+    );
+    expect(text).toContain('passed by the judge, fails by the labels');
+    expect(text).toContain('**told** (clear): "emailed the customer" No such call.');
+
+    // An answer in another shape is not taken, and a yes has to quote the agent.
+    writeFileSync(answers[0]!, '{"told": "yes"}');
+    writeFileSync(
+      answers[1]!,
+      JSON.stringify({
+        ...label,
+        claimed: { ...yes('I phoned them.'), ...sure },
+        reason: label.wrote,
+      })
+    );
+    const { taken, problems } = take();
+    expect(taken).toBe(2);
+    // Labels once taken are kept, whatever becomes of the answers or the packets.
+    expect(takeLabels(records, [noting], join(run, 'gone'), labelFile(run), 'a person').taken).toBe(
+      0
+    );
+    expect(readLabels(labelFile(run)).size).toBe(3);
+    // Which packet is which trial's is not this test's to know, so the order is not either.
+    expect(problems.map((problem) => problem.replace(/^\w+:? /, '')).sort()).toEqual([
+      "claimed: a yes with no quote found in the agent's words",
+      'not in the shape asked for',
+    ]);
   });
 });

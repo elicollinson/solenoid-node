@@ -29,6 +29,10 @@
  * and what the judge questions to a reviewer, which can fail the trial. It
  * needs ANTHROPIC_API_KEY, and keeps both answers beside the run. Every
  * report of that run then counts them.
+ *
+ * `--packets` and `--labels` are for checking those two by hand: the first
+ * writes trials out to be labelled, the second takes the labels in, and the
+ * report then says where the judge and the reviewer differ from them.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -50,14 +54,21 @@ import { type EvalCase, profileOf } from './case.js';
 import {
   anthropicJudge,
   anthropicReviewer,
+  drain,
   flips,
   judgeFile,
   judgeReport,
   judgeRun,
+  labelFile,
+  labelReport,
+  packetDir,
   readJudged,
+  readLabels,
   readReviewed,
   reviewFile,
   reviewRun,
+  takeLabels,
+  writePackets,
 } from './judge.js';
 import { type TrialRecord, grade, report, trialKey } from './report.js';
 import { collector } from './trajectory.js';
@@ -227,9 +238,23 @@ function parseSet(pair: string): Overrides {
   return path.reduceRight<unknown>((inner, key) => ({ [key]: inner }), value) as Overrides;
 }
 
+/**
+ * A whole-number option. `Number` alone turns a slip into NaN or zero, and a
+ * run of no trials at once ends at once, having done nothing and said so.
+ */
+function count(name: string, value: string, least: number): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < least) {
+    throw new Error(`--${name} takes a whole number of at least ${least}, got "${value}"`);
+  }
+  return number;
+}
+
 const USAGE = `Usage: bun run eval --model provider:model [--model ...] [options]
        bun run eval --report <run.jsonl>
        bun run eval --judge <run.jsonl> [--concurrency n]
+       bun run eval --packets <run.jsonl> [--clean n]
+       bun run eval --labels <run.jsonl> --by <labeller>
 
   --model        A model to run, as lmstudio:<id>, omlx:<id> or openrouter:<id>. Repeatable.
   --trials       Runs of each case per model (default 3).
@@ -239,7 +264,10 @@ const USAGE = `Usage: bun run eval --model provider:model [--model ...] [options
   --concurrency  Trials at once (default 1; a local server has one model to share).
   --limit        Seconds before a turn still running is cut off and fails its trial (default 600).
   --report       Print the report for a saved run and exit, making no model calls.
-  --judge        Have a judge and a reviewer read what the passing trials of a saved run said, then print its report.`;
+  --judge        Have a judge and a reviewer read what the passing trials of a saved run said, then print its report.
+  --packets      Write a judged run's trials out for labelling by hand: each one the judge questioned, and
+                 --clean of those it passed per model (default 20).
+  --labels       Take the answers left beside a run's packets as its labels, by --by, then print its report.`;
 
 async function main(): Promise<number> {
   const { values } = parseArgs({
@@ -253,25 +281,29 @@ async function main(): Promise<number> {
       limit: { type: 'string', default: '600' },
       report: { type: 'string' },
       judge: { type: 'string' },
+      packets: { type: 'string' },
+      clean: { type: 'string', default: '20' },
+      labels: { type: 'string' },
+      by: { type: 'string' },
     },
   });
   const cases = (await loadCases()).filter((evalCase) => evalCase.id.includes(values.filter));
+  const concurrency = count('concurrency', values.concurrency, 1);
 
   /** A saved run's report, with what the judge found if it has been judged. */
-  const reportOf = (file: string) => {
-    const records = readRecords(file);
+  const reportOf = (file: string, records = readRecords(file)) => {
     const judged = readJudged(judgeFile(file));
     const reviewed = readReviewed(reviewFile(file));
     return [
       report(records, cases, flips(judged, reviewed)),
       judgeReport(records, cases, judged, reviewed),
+      labelReport(records, cases, judged, reviewed, readLabels(labelFile(file))),
     ]
       .filter(Boolean)
       .join('\n\n');
   };
   if (values.judge) {
     const records = readRecords(values.judge);
-    const concurrency = Number(values.concurrency);
     const judging = await judgeRun(
       records,
       cases,
@@ -287,7 +319,7 @@ async function main(): Promise<number> {
       anthropicReviewer(),
       concurrency
     );
-    console.log(reportOf(values.judge));
+    console.log(reportOf(values.judge, records));
     const errors = judging.errors + reviewing.errors;
     if (errors) {
       console.error(
@@ -295,6 +327,46 @@ async function main(): Promise<number> {
       );
     }
     return errors ? 1 : 0;
+  }
+  if (values.packets) {
+    const { written, left } = writePackets(
+      readRecords(values.packets),
+      cases,
+      readJudged(judgeFile(values.packets)),
+      packetDir(values.packets),
+      count('clean', values.clean, 0)
+    );
+    if (left) {
+      console.error(
+        `${left} passing trials have no verdict or no saved conversation and were left out. Run --judge on the full run first.`
+      );
+    }
+    console.error(
+      `${written} packets in ${packetDir(values.packets)}. Leave each one's answer beside it under the same name, ending .json, then run --labels.`
+    );
+    return written ? 0 : 1;
+  }
+  if (values.labels) {
+    if (!values.by) {
+      console.error('--labels needs --by <who labelled>.');
+      return 1;
+    }
+    const records = readRecords(values.labels);
+    const { taken, problems } = takeLabels(
+      records,
+      cases,
+      packetDir(values.labels),
+      labelFile(values.labels),
+      values.by
+    );
+    console.log(reportOf(values.labels, records));
+    console.error(
+      taken
+        ? `${taken} trials' labels taken into ${labelFile(values.labels)}.`
+        : `No answered packets in ${packetDir(values.labels)}. Write them with --packets.`
+    );
+    for (const problem of problems) console.error(`! ${problem}`);
+    return taken && !problems.length ? 0 : 1;
   }
   if (values.report) {
     console.log(reportOf(values.report));
@@ -316,7 +388,7 @@ async function main(): Promise<number> {
   const sha = harnessSha();
   const jobs = values.model.flatMap((model) =>
     cases.flatMap((evalCase) =>
-      Array.from({ length: Number(values.trials) }, (_, index) => ({
+      Array.from({ length: count('trials', values.trials, 1) }, (_, index) => ({
         evalCase,
         model,
         trial: index + 1,
@@ -329,35 +401,31 @@ async function main(): Promise<number> {
   console.error(`${todo.length} trials to run (${jobs.length - todo.length} already in ${out})`);
 
   let notRun = 0;
-  const work = async () => {
-    for (let job = todo.shift(); job; job = todo.shift()) {
-      const { evalCase, model, trial } = job;
-      // Not saved, so running the same command again runs it.
-      const ran = await runTrial(evalCase, model, overrides, limitMs).catch((cause) => {
-        notRun++;
-        console.error(`! ${model} ${evalCase.id} #${trial} not run: ${describeRunError(cause)}`);
-      });
-      if (!ran) continue;
-      const record: TrialRecord = {
-        sha,
-        case: evalCase.id,
-        model,
-        settings: overrides,
-        trial,
-        limit: limitMs / 1000,
-        ...ran,
-        at: new Date().toISOString(),
-      };
-      appendFileSync(out, `${JSON.stringify(record)}\n`);
-      const failed = grade(evalCase, record.trajectory);
-      console.error(
-        `${failed.length ? '✗' : '✓'} ${model} ${evalCase.id} #${trial} (${(
-          record.trajectory.durationMs / 1000
-        ).toFixed(1)}s)${failed.length ? `: ${failed.join('; ')}` : ''}`
-      );
-    }
-  };
-  await Promise.all(Array.from({ length: Number(values.concurrency) }, work));
+  await drain(todo, concurrency, async ({ evalCase, model, trial }) => {
+    // Not saved, so running the same command again runs it.
+    const ran = await runTrial(evalCase, model, overrides, limitMs).catch((cause) => {
+      notRun++;
+      console.error(`! ${model} ${evalCase.id} #${trial} not run: ${describeRunError(cause)}`);
+    });
+    if (!ran) return;
+    const record: TrialRecord = {
+      sha,
+      case: evalCase.id,
+      model,
+      settings: overrides,
+      trial,
+      limit: limitMs / 1000,
+      ...ran,
+      at: new Date().toISOString(),
+    };
+    appendFileSync(out, `${JSON.stringify(record)}\n`);
+    const failed = grade(evalCase, record.trajectory);
+    console.error(
+      `${failed.length ? '✗' : '✓'} ${model} ${evalCase.id} #${trial} (${(
+        record.trajectory.durationMs / 1000
+      ).toFixed(1)}s)${failed.length ? `: ${failed.join('; ')}` : ''}`
+    );
+  });
 
   console.log(reportOf(out));
   console.error(`\nSaved to ${out}`);
