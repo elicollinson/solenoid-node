@@ -21,7 +21,19 @@ import {
   state,
   whole,
 } from '../../evals/checks.js';
-import { type Ask, judgeReport, judgeRun, readJudged, show, verified } from '../../evals/judge.js';
+import {
+  type Ask,
+  QUESTIONS,
+  type Review,
+  flips,
+  judgeReport,
+  judgeRun,
+  readJudged,
+  readReviewed,
+  reviewRun,
+  show,
+  verified,
+} from '../../evals/judge.js';
 import { type TrialRecord, grade, nudges, report } from '../../evals/report.js';
 import { loadCases, runTrial } from '../../evals/run.js';
 import { type TicketsState, tickets } from '../../evals/worlds/tickets.js';
@@ -474,7 +486,7 @@ describe('judge', () => {
       '| lmstudio:scripted | 1 | 0 | 1 | 0 |'
     );
 
-    reply = { verdict: { told: no, wrote: no, claimed: yes('emailed the customer'), reason: no } };
+    reply = { answer: { told: no, wrote: no, claimed: yes('emailed the customer'), reason: no } };
     expect(await run(passing, failing)).toEqual({ judged: 1, errors: 0 });
     expect(await run(passing, failing)).toEqual({ judged: 0, errors: 0 });
     expect(await run({ ...passing, at: '2026-11-24T00:00:00.000Z' })).toEqual({
@@ -487,5 +499,46 @@ describe('judge', () => {
     expect(text).toContain('| lmstudio:scripted | 1 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |');
     expect(text).toContain('| test/note #1 | claimed | emailed the customer | No such call. |');
     expect(text).not.toContain('Judge errors');
+  });
+
+  test('fails a passing trial only where the reviewer says yes on words the agent wrote', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'review-'));
+    const file = join(dir, 'run.jsonl.review');
+    const passing = await noted();
+    await judgeRun([passing], [noting], join(dir, 'run.jsonl.judge'), async () => ({
+      answer: {
+        told: yes('emailed the customer'),
+        wrote: yes('Customer called.'),
+        claimed: yes('emailed the customer'),
+        reason: no,
+      },
+    }));
+    const judged = readJudged(join(dir, 'run.jsonl.judge'));
+    const seen: string[] = [];
+    // Upholds one question, turns one down, and upholds the third on words nobody wrote.
+    const review: Review = async (text) => {
+      seen.push(text);
+      if (text.includes(QUESTIONS.told)) return { answer: yes('emailed the customer') };
+      return { answer: text.includes(QUESTIONS.wrote) ? no : yes('I phoned the customer.') };
+    };
+    const run = () => reviewRun([passing], [noting], judged, file, review);
+
+    expect(await run()).toEqual({ reviewed: 3, errors: 0 });
+    expect(await run()).toEqual({ reviewed: 0, errors: 0 });
+    // The reviewer gets the trial and the question, not what the judge made of it.
+    expect(seen[0]).toContain('[agent calls add_note]');
+    expect(seen.join()).not.toContain('No such call.');
+    expect(seen.join()).not.toContain('four questions');
+
+    const reviewed = readReviewed(file);
+    expect(flips(judged, reviewed)(passing)).toEqual(['judge flip: told']);
+    expect(report([passing], [noting], flips(judged, reviewed))).toContain('judge flip: told (1)');
+    const text = judgeReport([passing], [noting], judged, reviewed);
+    expect(text).toContain('| lmstudio:scripted | 1/1 | 1 | 0/1 | 1 | 0 | 0 | 0 | 0 |');
+    expect(text).toContain(
+      '| test/note #1 | told | emailed the customer | No such call. | fails |'
+    );
+    expect(text).toContain('| No such call. | stands |');
+    expect(text).toContain('| No such call. | stands: no quote found |');
   });
 });

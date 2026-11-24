@@ -9,7 +9,7 @@
  *   bun run eval --model ... --filter recovery --set agent.think=low
  *   OMLX_BASE_URL=https://host:port/v1 bun run eval --model omlx:<id>
  *   bun run eval --report evals/runs/<file>.jsonl      # grade again, no model calls
- *   bun run eval --judge evals/runs/<file>.jsonl       # have the judge read what passing trials said
+ *   bun run eval --judge evals/runs/<file>.jsonl       # fail passing trials for what they said
  *
  * Each trial gets a harness of its own, built from settings made here: one
  * route and no fallback, so a failure is the model's; screening off, so the
@@ -25,9 +25,10 @@
  * file and skips what the file already holds: run the same command again to
  * resume one that was stopped.
  *
- * `--judge` puts each passing trial of a saved run to the judge (./judge.ts),
- * which needs ANTHROPIC_API_KEY, and keeps the verdicts beside the run. Every
- * report of that run then carries them.
+ * `--judge` puts each passing trial of a saved run to the judge (./judge.ts)
+ * and what the judge questions to a reviewer, which can fail the trial. It
+ * needs ANTHROPIC_API_KEY, and keeps both answers beside the run. Every
+ * report of that run then counts them.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -46,7 +47,18 @@ import {
   generateSettings,
 } from '../src/index.js';
 import { type EvalCase, profileOf } from './case.js';
-import { anthropicJudge, judgeFile, judgeReport, judgeRun, readJudged } from './judge.js';
+import {
+  anthropicJudge,
+  anthropicReviewer,
+  flips,
+  judgeFile,
+  judgeReport,
+  judgeRun,
+  readJudged,
+  readReviewed,
+  reviewFile,
+  reviewRun,
+} from './judge.js';
 import { type TrialRecord, grade, report, trialKey } from './report.js';
 import { collector } from './trajectory.js';
 
@@ -227,7 +239,7 @@ const USAGE = `Usage: bun run eval --model provider:model [--model ...] [options
   --concurrency  Trials at once (default 1; a local server has one model to share).
   --limit        Seconds before a turn still running is cut off and fails its trial (default 600).
   --report       Print the report for a saved run and exit, making no model calls.
-  --judge        Judge what the passing trials of a saved run said, then print its report.`;
+  --judge        Have a judge and a reviewer read what the passing trials of a saved run said, then print its report.`;
 
 async function main(): Promise<number> {
   const { values } = parseArgs({
@@ -248,21 +260,40 @@ async function main(): Promise<number> {
   /** A saved run's report, with what the judge found if it has been judged. */
   const reportOf = (file: string) => {
     const records = readRecords(file);
-    return [report(records, cases), judgeReport(records, cases, readJudged(judgeFile(file)))]
+    const judged = readJudged(judgeFile(file));
+    const reviewed = readReviewed(reviewFile(file));
+    return [
+      report(records, cases, flips(judged, reviewed)),
+      judgeReport(records, cases, judged, reviewed),
+    ]
       .filter(Boolean)
       .join('\n\n');
   };
   if (values.judge) {
-    const { errors } = await judgeRun(
-      readRecords(values.judge),
+    const records = readRecords(values.judge);
+    const concurrency = Number(values.concurrency);
+    const judging = await judgeRun(
+      records,
       cases,
       judgeFile(values.judge),
       anthropicJudge(),
-      Number(values.concurrency)
+      concurrency
+    );
+    const reviewing = await reviewRun(
+      records,
+      cases,
+      readJudged(judgeFile(values.judge)),
+      reviewFile(values.judge),
+      anthropicReviewer(),
+      concurrency
     );
     console.log(reportOf(values.judge));
-    if (errors)
-      console.error(`${errors} trials were not judged. Run the same command again for them.`);
+    const errors = judging.errors + reviewing.errors;
+    if (errors) {
+      console.error(
+        `${judging.errors} trials were not judged and ${reviewing.errors} raised questions not reviewed. Run the same command again for them.`
+      );
+    }
     return errors ? 1 : 0;
   }
   if (values.report) {

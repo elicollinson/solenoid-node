@@ -78,12 +78,20 @@ export function table(headers: string[], rows: string[][]): string {
   return [line(headers), line(headers.map(() => '---')), ...rows.map(line)].join('\n');
 }
 
-export function report(records: TrialRecord[], cases: EvalCase[]): string {
+/**
+ * `more` names what failed a trial beyond its checks: the judge's flips
+ * (./judge.ts), which only ever turn a passing trial into a failing one.
+ */
+export function report(
+  records: TrialRecord[],
+  cases: EvalCase[],
+  more: (record: TrialRecord) => string[] = () => []
+): string {
   const byId = new Map(cases.map((evalCase) => [evalCase.id, evalCase]));
   const trials = records.flatMap((record) => {
     const evalCase = byId.get(record.case);
     if (!evalCase) return [];
-    const failed = grade(evalCase, record.trajectory);
+    const failed = [...grade(evalCase, record.trajectory), ...more(record)];
     return [
       { ...record, evalCase, condition: conditionOf(record), failed, passed: !failed.length },
     ];
