@@ -74,10 +74,29 @@ export const noRepeatedFailedCall = (): Check => ({
   },
 });
 
-/** The final answer, or a chart drawn with it, matches. */
-export const answered = (pattern: RegExp, name = `answer matches ${pattern}`): Check => ({
+/**
+ * Whether `words` stands in `text` as whole words: 180 does, in "180 euros",
+ * and does not in 1180. What /\b180\b/ tests, for words known only when a
+ * case is built, without a pattern made at run time.
+ */
+export const whole = (text: string, words: string | number): boolean =>
+  following(text, String(words)).some((next) => !/\w/.test(next));
+
+/** The character after each place `words` starts a word in `text`; empty at the end of the text. */
+function following(text: string, words: string): string[] {
+  const found: string[] = [];
+  // No words are nowhere: a search for them would also never move on.
+  if (!words) return found;
+  for (let at = text.indexOf(words); at >= 0; at = text.indexOf(words, at + 1)) {
+    if (!/\w/.test(text.charAt(at - 1))) found.push(text.charAt(at + words.length));
+  }
+  return found;
+}
+
+/** The final answer, or a chart drawn with it, matches: a pattern, or a number standing alone. */
+export const answered = (wanted: RegExp | number, name = `answer matches ${wanted}`): Check => ({
   name,
-  pass: (t) => pattern.test(shown(t)),
+  pass: (t) => (typeof wanted === 'number' ? whole(shown(t), wanted) : wanted.test(shown(t))),
 });
 
 /** Neither the final answer nor a chart drawn with it matches. */
@@ -127,6 +146,8 @@ export const reports = (pattern: RegExp, count: number, name: string): Check => 
 
 /** The harness's own tools, which a model can also leak into its answer. */
 const HARNESS_TOOLS = ['render_chart', 'spawn_subagent', 'open_tool_group'];
+/** A chat template's own tokens, which only a model's raw output carries. */
+const TEMPLATE_TOKEN = /<\|[^|>\s]{1,24}\|>|<tool_code>/;
 
 /**
  * No answer carries a tool call as text, or the chat template's own tokens:
@@ -137,12 +158,11 @@ export const noLeakedCall: Check = {
   name: 'no tool call written into an answer',
   pass: (t) => {
     const names = [...new Set([...HARNESS_TOOLS, ...t.toolCalls.map((call) => call.name)])];
-    const leaked = new RegExp(
-      // No space allowed before the bracket: "calling list_shipments (from the
-      // cursor)" is prose about a tool, not a call.
-      `\\b(?:${names.join('|')})[({]|<\\|[^|>\\s]{1,24}\\|>|<tool_code>`
-    );
-    return !t.answers.some((answer) => leaked.test(answer));
+    // A name with its bracket straight after. With a space between, "calling
+    // list_shipments (from the cursor)" is prose about a tool, not a call.
+    const leaks = (answer: string) =>
+      names.some((name) => following(answer, name).some((next) => next === '(' || next === '{'));
+    return !t.answers.some((answer) => TEMPLATE_TOKEN.test(answer) || leaks(answer));
   },
 };
 

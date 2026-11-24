@@ -19,6 +19,7 @@ import {
   output,
   reports,
   state,
+  whole,
 } from '../../evals/checks.js';
 import { type Ask, judgeReport, judgeRun, readJudged, show, verified } from '../../evals/judge.js';
 import { type TrialRecord, grade, nudges, report } from '../../evals/report.js';
@@ -285,6 +286,22 @@ describe('checks', () => {
     expect(noLeakedCall.pass(said('The total is 1,732.50 euros.'))).toBe(true);
     expect(noLeakedCall.pass(said('render_chart{chartType:<|"|>bar<|"|>}'))).toBe(false);
     expect(noLeakedCall.pass(said('Let me call render_chart (with the totals) next.'))).toBe(true);
+    expect(noLeakedCall.pass(said('I ran my_render_chart(x) by hand.'))).toBe(true);
+    expect(noLeakedCall.pass(said('Next: spawn_subagent({"task":"look"})'))).toBe(false);
+  });
+
+  test('a number is found only where it stands alone', () => {
+    expect(whole('Refunded 180 euros.', 180)).toBe(true);
+    expect(whole('(180)', 180)).toBe(true);
+    expect(whole('180', 180)).toBe(true);
+    expect(whole('Order 1801 and 0180.', 180)).toBe(false);
+    expect(whole('It costs 12,50 euros.', '12,50')).toBe(true);
+    expect(whole('It costs 112,50 euros.', '12,50')).toBe(false);
+    expect(answered(180).pass({ answers: ['1180, then 180'], toolCalls: [] } as never)).toBe(true);
+    // A model can call a tool with no name; that must not hang the scan.
+    expect(
+      noLeakedCall.pass({ answers: ['Done (twice).'], toolCalls: [{ name: '' }] } as never)
+    ).toBe(true);
   });
 
   test('a model call that neither acted nor answered is counted as a nudge', () => {

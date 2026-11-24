@@ -3,7 +3,7 @@
  * redrawing what it cannot see.
  */
 import { defineCase } from '../case.js';
-import { called, charts } from '../checks.js';
+import { called, charts, whole } from '../checks.js';
 import { warehouse } from '../worlds/warehouse.js';
 
 export default [
@@ -20,7 +20,7 @@ export default [
       },
       {
         name: 'the chart shows 130, 45 and 900',
-        pass: (t) => [130, 45, 900].every((n) => new RegExp(`\\b${n}\\b`).test(charts(t))),
+        pass: (t) => [130, 45, 900].every((n) => whole(charts(t), n)),
       },
     ],
   }),

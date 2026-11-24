@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { defineTool } from '../../src/index.js';
 import { call, say } from '../../tests/helpers/scripted-provider.js';
 import { sweep } from '../case.js';
-import { answered, callCount, called, charts, reports, state } from '../checks.js';
+import { answered, callCount, called, charts, reports, state, whole } from '../checks.js';
 import { warehouse } from '../worlds/warehouse.js';
 
 const VERBS = ['get', 'list', 'find', 'count'];
@@ -306,14 +306,14 @@ const asides = (count: number) =>
           tool: 'get_stock',
           item: name,
           answer: `${unitsOf(item)}.`,
-          right: new RegExp(`\\b${unitsOf(item)}\\b`),
+          right: (said: string) => whole(said, unitsOf(item)),
         }
       : {
           ask: `What does one ${name} cost?`,
           tool: 'get_price',
           item: name,
           answer: `${price} euros.`,
-          right: new RegExp(`\\b${price.replace('.', '[.,]')}\\b`),
+          right: (said: string) => whole(said.replaceAll(',', '.'), price),
         };
   });
 
@@ -403,11 +403,7 @@ export default [
     turns: [
       "One job failed in last night's deploy. Read the log and tell me which job it was and why it failed.",
     ],
-    checks: [
-      called('read_log'),
-      answered(new RegExp(`\\b${failedJob(size)}\\b`)),
-      answered(/quota/i),
-    ],
+    checks: [called('read_log'), answered(failedJob(size)), answered(/quota/i)],
     reference: [
       call('read_log', {}),
       say(`Job ${failedJob(size)} failed: the disk quota on vol-7 was exceeded.`),
@@ -426,7 +422,7 @@ export default [
             (made) => !made.name.startsWith(STOCK_TOOL) || made.name === stockTool(WAREHOUSE)
           ),
       },
-      answered(new RegExp(`\\b${widgetsIn(WAREHOUSE)}\\b`)),
+      answered(widgetsIn(WAREHOUSE)),
     ],
     reference: [
       call(stockTool(WAREHOUSE), {}),
@@ -451,7 +447,7 @@ export default [
           // A turn with no text ended on a chart, which is an answer too.
           // ponytail: any chart of the run counts for such a turn; record a
           // call's turn if a wrong chart is ever hidden by a later right one.
-          pass: (t) => between.every((aside, i) => aside.right.test(t.answers[i + 1] || charts(t))),
+          pass: (t) => between.every((aside, i) => aside.right(t.answers[i + 1] || charts(t))),
         },
       ],
       reference: [

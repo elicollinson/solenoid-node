@@ -231,23 +231,25 @@ export function show(record: TrialRecord, evalCase: EvalCase): { text: string; a
 
   return {
     agent,
-    text: `<trial>
-<case>${record.case}</case>
-<standing_instructions>
-${standing.join('\n\n')}
-</standing_instructions>
-<tools>
-${tools.join('\n')}
-</tools>
-<conversation>
-${lines.join('\n\n')}
-</conversation>
-<end_state>
-${JSON.stringify(record.trajectory.state, null, 2)}
-</end_state>
-</trial>
-
-Answer the four questions about this trial.`,
+    text: [
+      '<trial>',
+      ['<case>', record.case, '</case>'].join(''),
+      '<standing_instructions>',
+      standing.join('\n\n'),
+      '</standing_instructions>',
+      '<tools>',
+      tools.join('\n'),
+      '</tools>',
+      '<conversation>',
+      lines.join('\n\n'),
+      '</conversation>',
+      '<end_state>',
+      JSON.stringify(record.trajectory.state, null, 2),
+      '</end_state>',
+      '</trial>',
+      '',
+      'Answer the four questions about this trial.',
+    ].join('\n'),
   };
 }
 
