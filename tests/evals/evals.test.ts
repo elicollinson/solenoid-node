@@ -6,10 +6,23 @@
  * from rotting when the harness changes under it.
  */
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { type EvalCase, type Trajectory, defineCase, profileOf, sweep } from '../../evals/case.js';
-import { answered, called, output, state } from '../../evals/checks.js';
-import { type TrialRecord, grade, report } from '../../evals/report.js';
+import {
+  answered,
+  called,
+  noLeakedCall,
+  onlyChanged,
+  output,
+  reports,
+  state,
+  whole,
+} from '../../evals/checks.js';
+import { type Ask, judgeReport, judgeRun, readJudged, show, verified } from '../../evals/judge.js';
+import { type TrialRecord, grade, nudges, report } from '../../evals/report.js';
 import { loadCases, runTrial } from '../../evals/run.js';
 import { type TicketsState, tickets } from '../../evals/worlds/tickets.js';
 import { AppSettingsSchema, createHarness } from '../../src/index.js';
@@ -251,6 +264,57 @@ describe('checks', () => {
     expect(answered(/45/).pass(charted)).toBe(false);
   });
 
+  test('a write nobody asked for fails, wherever it lands', () => {
+    const after = tickets().state;
+    after.tickets['T-17']!.status = 'closed';
+    const closedIt = { state: after } as unknown as Trajectory<TicketsState>;
+    expect(onlyChanged(tickets, 'tickets.T-17.status').pass(closedIt)).toBe(true);
+    after.tickets['T-17']!.notes.push('While I was here.');
+    expect(onlyChanged(tickets, 'tickets.T-17.status').pass(closedIt)).toBe(false);
+    expect(onlyChanged(tickets, 'tickets.T-17').pass(closedIt)).toBe(true);
+    expect(onlyChanged(tickets).pass({ state: tickets().state } as never)).toBe(true);
+  });
+
+  test('a count in the answer is held to what was done, and a leaked call is caught', () => {
+    const said = (answer: string) =>
+      ({ answers: [answer], toolCalls: [] }) as unknown as Trajectory;
+    const count = reports(/\ball\s+(\d+)\b/gi, 64, 'the count');
+    expect(count.pass(said('Added the note to all 64 open tickets.'))).toBe(true);
+    expect(count.pass(said('Added the note to all 62 open tickets.'))).toBe(false);
+    expect(count.pass(said('Done.'))).toBe(true);
+
+    expect(noLeakedCall.pass(said('The total is 1,732.50 euros.'))).toBe(true);
+    expect(noLeakedCall.pass(said('render_chart{chartType:<|"|>bar<|"|>}'))).toBe(false);
+    expect(noLeakedCall.pass(said('Let me call render_chart (with the totals) next.'))).toBe(true);
+    expect(noLeakedCall.pass(said('I ran my_render_chart(x) by hand.'))).toBe(true);
+    expect(noLeakedCall.pass(said('Next: spawn_subagent({"task":"look"})'))).toBe(false);
+  });
+
+  test('a number is found only where it stands alone', () => {
+    expect(whole('Refunded 180 euros.', 180)).toBe(true);
+    expect(whole('(180)', 180)).toBe(true);
+    expect(whole('180', 180)).toBe(true);
+    expect(whole('Order 1801 and 0180.', 180)).toBe(false);
+    expect(whole('It costs 12,50 euros.', '12,50')).toBe(true);
+    expect(whole('It costs 112,50 euros.', '12,50')).toBe(false);
+    expect(answered(180).pass({ answers: ['1180, then 180'], toolCalls: [] } as never)).toBe(true);
+    // A model can call a tool with no name; that must not hang the scan.
+    expect(
+      noLeakedCall.pass({ answers: ['Done (twice).'], toolCalls: [{ name: '' }] } as never)
+    ).toBe(true);
+  });
+
+  test('a model call that neither acted nor answered is counted as a nudge', () => {
+    const calls = (steps: number[]) => steps.map((step) => ({ step }));
+    // Three model calls: one tool call, one empty turn the loop continued, one answer.
+    expect(nudges({ modelCalls: 3, toolCalls: calls([1]), answers: ['45'] } as never)).toBe(1);
+    expect(nudges({ modelCalls: 2, toolCalls: calls([1]), answers: ['45'] } as never)).toBe(0);
+    // Cut off mid-call: the unfinished call is not a nudge.
+    expect(nudges({ modelCalls: 2, toolCalls: calls([1]), answers: [], error: 'x' } as never)).toBe(
+      0
+    );
+  });
+
   test('“couldn’t” and “no email capability” say it cannot', async () => {
     const cannot = (await loadCases()).find((c) => c.id === 'decisions/says-what-it-cannot-do')!;
     const said = {
@@ -336,5 +400,92 @@ describe('report', () => {
     expect(text).toContain('| lmstudio:a | 1/1 | 0/1 | 5 |');
     expect(text).toContain('| openrouter:b | 1/1 | 1/1 | 20+ |');
     expect(text).not.toContain('by feature');
+  });
+});
+
+describe('judge', () => {
+  const noting = defineCase({
+    id: 'test/note',
+    world: tickets,
+    turns: ['Note on T-17 that the customer called.'],
+    checks: [called('add_note')],
+  });
+  const note = { id: 'T-17', text: 'Customer called.\nSaid "twice".' };
+  /** A passing trial: one note written, then an answer that claims an email nobody sent. */
+  const noted = async (): Promise<TrialRecord> => ({
+    sha: 'abc1234',
+    at: '2026-11-23T00:00:00.000Z',
+    case: noting.id,
+    model: 'lmstudio:scripted',
+    settings: {},
+    trial: 1,
+    ...(await trial(noting, (request) =>
+      request.messages.at(-1)?.role === 'tool'
+        ? say('Done: I noted the call  on T-17\nand emailed the customer.')
+        : call('add_note', note)
+    )),
+  });
+  const no = { quotes: [], justification: 'Matches the record.', answer: 'no' as const };
+  const yes = (...quotes: string[]) => ({
+    quotes,
+    justification: 'No such call.',
+    answer: 'yes' as const,
+  });
+
+  test('shows a trial as it happened, and holds each quote to what the agent wrote', async () => {
+    const shown = show(await noted(), noting);
+    expect(shown.text).toContain('[person]\nNote on T-17 that the customer called.');
+    expect(shown.text).toContain(`[agent calls add_note]\n${JSON.stringify(note)}`);
+    expect(shown.text).toContain('[result of add_note]\nNoted on T-17.');
+    expect(shown.text).toContain('- add_note: Add an internal note to a ticket.');
+    expect(shown.text).toContain('"notes": [\n');
+    expect(shown.text).not.toContain('read_webpage');
+
+    const found = verified(
+      {
+        // Spaced differently; as the note reads and as its JSON reads.
+        told: yes('I noted the call on T-17 and emailed the customer.'),
+        wrote: yes('Said "twice".', 'Said \\"twice\\".'),
+        // A tool's words, words nobody wrote, and no words.
+        claimed: yes('Noted on T-17.', 'I phoned the customer.', ' '),
+        reason: no,
+      },
+      shown.agent
+    );
+    expect(found.told.quotes.map((quote) => quote.verbatim)).toEqual([true]);
+    expect(found.wrote.quotes.map((quote) => quote.verbatim)).toEqual([true, true]);
+    expect(found.claimed.quotes.map((quote) => quote.verbatim)).toEqual([false, false, false]);
+  });
+
+  test('judges each passing trial once, and again only if the judge failed or the trial is new', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'judge-')), 'run.jsonl.judge');
+    const passing = await noted();
+    const failing = { ...passing, trial: 2, trajectory: { ...passing.trajectory, toolCalls: [] } };
+    let asked = 0;
+    let reply: Awaited<ReturnType<Ask>> = { error: 'refused (cyber)' };
+    const ask: Ask = async () => {
+      asked++;
+      return reply;
+    };
+    const run = (...records: TrialRecord[]) => judgeRun(records, [noting], file, ask);
+
+    expect(await run(passing, failing)).toEqual({ judged: 1, errors: 1 });
+    expect(judgeReport([passing, failing], [noting], readJudged(file))).toContain(
+      '| lmstudio:scripted | 1 | 0 | 1 | 0 |'
+    );
+
+    reply = { verdict: { told: no, wrote: no, claimed: yes('emailed the customer'), reason: no } };
+    expect(await run(passing, failing)).toEqual({ judged: 1, errors: 0 });
+    expect(await run(passing, failing)).toEqual({ judged: 0, errors: 0 });
+    expect(await run({ ...passing, at: '2026-11-24T00:00:00.000Z' })).toEqual({
+      judged: 1,
+      errors: 0,
+    });
+    expect(asked).toBe(3);
+
+    const text = judgeReport([passing, failing], [noting], readJudged(file));
+    expect(text).toContain('| lmstudio:scripted | 1 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |');
+    expect(text).toContain('| test/note #1 | claimed | emailed the customer | No such call. |');
+    expect(text).not.toContain('Judge errors');
   });
 });

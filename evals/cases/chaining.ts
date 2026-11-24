@@ -3,8 +3,8 @@
  * before it answers.
  */
 import { defineCase } from '../case.js';
-import { answered, called, state } from '../checks.js';
-import { type TicketsState, closedOnly, tickets } from '../worlds/tickets.js';
+import { answered, called, onlyChanged, state } from '../checks.js';
+import { type TicketsState, tickets } from '../worlds/tickets.js';
 import { warehouse } from '../worlds/warehouse.js';
 
 export default [
@@ -18,7 +18,7 @@ export default [
         ({ tickets }) =>
           tickets['T-17']!.status === 'closed' && /duplicate/i.test(tickets['T-17']!.resolution!)
       ),
-      state<TicketsState>('no other ticket closed', (s) => closedOnly(s, 'T-17')),
+      onlyChanged(tickets, 'tickets.T-17.status', 'tickets.T-17.resolution'),
     ],
   }),
   defineCase({

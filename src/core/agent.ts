@@ -73,6 +73,9 @@ import {
  * with what it has instead of looping until someone interrupts it.
  */
 export const DEFAULT_MAX_TURNS = 25;
+/** What the model is told before its last turn of a run, when it holds no tools. */
+export const LAST_TURN_NOTICE =
+  'This is your last turn and no tools are available. Answer now from what you already have, and say plainly what you could not finish.';
 const SUBMIT_RESULT_TOOL_NAME = 'submit_result';
 /** What the model is told after a display tool's content reached the person. */
 const DISPLAY_NOTICE = 'Shown to the person in the chat.';
@@ -439,8 +442,7 @@ export class Agent {
         // Gemma's accept a system message only at the start.
         messages.push({
           role: 'user',
-          content:
-            'This is your last turn and no tools are available. Answer now from what you already have, and say plainly what you could not finish.',
+          content: LAST_TURN_NOTICE,
           screened: true,
         });
       }

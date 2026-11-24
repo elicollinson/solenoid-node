@@ -3,9 +3,9 @@ import type { TextOrigin } from '@elicollinson/solenoid-security';
  * Chat Providers
  *
  * One normalized chat interface for the agent loop, and one implementation of
- * it: OpenAI-compatible Chat Completions. That covers both supported backends,
- * LM Studio (local, `/v1`) and OpenRouter, which differ only in how they spell
- * reasoning on the wire.
+ * it: OpenAI-compatible Chat Completions. That covers every supported backend:
+ * LM Studio and oMLX (local, `/v1`) and OpenRouter, which differ only in how
+ * they spell reasoning on the wire.
  *
  * Every call streams, even though `chat()` resolves to one finished message.
  * Streaming is what lets the UI draw text as it arrives (`onDelta`) and what
@@ -105,12 +105,12 @@ export type ModelRouteChain = readonly [ModelRoute, ...ModelRoute[]];
 
 /**
  * How a backend spells reasoning.
- * - `lmstudio`: `reasoning_effort` on the request, `reasoning_content` on the
- *   response.
+ * - `lmstudio` and `omlx`: `reasoning_effort` on the request, `reasoning_content`
+ *   on the response.
  * - `openrouter`: a `reasoning` object on the request, `reasoning` plus
  *   `reasoning_details` on the response.
  */
-export type ReasoningDialect = 'lmstudio' | 'openrouter';
+export type ReasoningDialect = 'lmstudio' | 'openrouter' | 'omlx';
 
 interface StreamedToolCall {
   id: string;
@@ -261,7 +261,7 @@ export class OpenAICompatibleProvider implements ChatProvider {
     if (this.providerName === 'openrouter') {
       return think === false ? { reasoning: { enabled: false } } : { reasoning: { effort: think } };
     }
-    // LM Studio reads `none` as "reasoning off".
+    // LM Studio and oMLX read `none` as "reasoning off".
     return { reasoning_effort: think === false ? 'none' : think };
   }
 

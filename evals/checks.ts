@@ -27,12 +27,14 @@ const named = (trajectory: Trajectory, name: string): ToolCallRecord[] =>
  * if a case ever asks about a chart from an earlier one.
  */
 const shown = (trajectory: Trajectory): string =>
-  [
-    trajectory.answers.at(-1) ?? '',
-    ...named(trajectory, 'render_chart')
-      .filter((chart) => chart.ok)
-      .map((chart) => Object.values(chart.args).join(' ')),
-  ].join('\n');
+  `${trajectory.answers.at(-1) ?? ''}\n${charts(trajectory)}`;
+
+/** Everything the charts drawn in a run showed, as text. */
+export const charts = (trajectory: Trajectory): string =>
+  named(trajectory, 'render_chart')
+    .filter((chart) => chart.ok)
+    .map((chart) => Object.values(chart.args).join(' '))
+    .join('\n');
 
 /** The tool ran at least once, with arguments holding `args` when given. */
 export const called = (name: string, args?: Record<string, unknown>): Check => ({
@@ -72,10 +74,29 @@ export const noRepeatedFailedCall = (): Check => ({
   },
 });
 
-/** The final answer, or a chart drawn with it, matches. */
-export const answered = (pattern: RegExp, name = `answer matches ${pattern}`): Check => ({
+/**
+ * Whether `words` stands in `text` as whole words: 180 does, in "180 euros",
+ * and does not in 1180. What /\b180\b/ tests, for words known only when a
+ * case is built, without a pattern made at run time.
+ */
+export const whole = (text: string, words: string | number): boolean =>
+  following(text, String(words)).some((next) => !/\w/.test(next));
+
+/** The character after each place `words` starts a word in `text`; empty at the end of the text. */
+function following(text: string, words: string): string[] {
+  const found: string[] = [];
+  // No words are nowhere: a search for them would also never move on.
+  if (!words) return found;
+  for (let at = text.indexOf(words); at >= 0; at = text.indexOf(words, at + 1)) {
+    if (!/\w/.test(text.charAt(at - 1))) found.push(text.charAt(at + words.length));
+  }
+  return found;
+}
+
+/** The final answer, or a chart drawn with it, matches: a pattern, or a number standing alone. */
+export const answered = (wanted: RegExp | number, name = `answer matches ${wanted}`): Check => ({
   name,
-  pass: (t) => pattern.test(shown(t)),
+  pass: (t) => (typeof wanted === 'number' ? whole(shown(t), wanted) : wanted.test(shown(t))),
 });
 
 /** Neither the final answer nor a chart drawn with it matches. */
@@ -83,6 +104,67 @@ export const notAnswered = (pattern: RegExp, name = `answer avoids ${pattern}`):
   name,
   pass: (t) => !pattern.test(shown(t)),
 });
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Where `after` differs from `before`, as dotted paths. Objects are walked; anything else is compared whole. */
+function changedPaths(before: unknown, after: unknown, path = ''): string[] {
+  if (isRecord(before) && isRecord(after)) {
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])].flatMap((key) =>
+      changedPaths(before[key], after[key], path ? `${path}.${key}` : key)
+    );
+  }
+  return JSON.stringify(before) === JSON.stringify(after) ? [] : [path];
+}
+
+/**
+ * The world ended as it began, except at `paths` (`tickets.T-17.status`, or
+ * `orders` for everything under it). The one rule for a write nobody asked
+ * for: a case names what its task may change, and anything else fails it.
+ * Whether the allowed changes are the right ones is for the case's own checks.
+ */
+export const onlyChanged = <S>(world: () => { state: S }, ...paths: string[]): Check<S> => ({
+  name: paths.length ? `nothing changed but ${paths.join(', ')}` : 'nothing in the world changed',
+  pass: (t) =>
+    changedPaths(world().state, t.state).every((changed) =>
+      paths.some((allowed) => changed === allowed || changed.startsWith(`${allowed}.`))
+    ),
+});
+
+/**
+ * Every number the final answer gives in the place `pattern` captures is
+ * `count`. An answer that gives no number has reported nothing false.
+ */
+export const reports = (pattern: RegExp, count: number, name: string): Check => ({
+  name,
+  pass: (t) =>
+    [...(t.answers.at(-1) ?? '').matchAll(pattern)].every(
+      (match) => Number(match.slice(1).find((group) => group !== undefined)) === count
+    ),
+});
+
+/** The harness's own tools, which a model can also leak into its answer. */
+const HARNESS_TOOLS = ['render_chart', 'spawn_subagent', 'open_tool_group'];
+/** A chat template's own tokens, which only a model's raw output carries. */
+const TEMPLATE_TOKEN = /<\|[^|>\s]{1,24}\|>|<tool_code>/;
+
+/**
+ * No answer carries a tool call as text, or the chat template's own tokens:
+ * a call the model meant to make and wrote out instead. Applied to every
+ * trial by `grade`.
+ */
+export const noLeakedCall: Check = {
+  name: 'no tool call written into an answer',
+  pass: (t) => {
+    const names = [...new Set([...HARNESS_TOOLS, ...t.toolCalls.map((call) => call.name)])];
+    // A name with its bracket straight after. With a space between, "calling
+    // list_shipments (from the cursor)" is prose about a tool, not a call.
+    const leaks = (answer: string) =>
+      names.some((name) => following(answer, name).some((next) => next === '(' || next === '{'));
+    return !t.answers.some((answer) => TEMPLATE_TOKEN.test(answer) || leaks(answer));
+  },
+};
 
 /** The world ended as it should have. */
 export const state = <S>(name: string, pass: (state: S) => boolean): Check<S> => ({

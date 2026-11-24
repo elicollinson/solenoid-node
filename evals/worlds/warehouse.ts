@@ -10,7 +10,7 @@ import type { World } from '../case.js';
 const STOCK = { widget: 130, gear: 45, bolt: 900 } as const;
 const PRICES = { widget: 9, gear: 12.5, bolt: 0.2 } as const;
 /** One shipment a page, so listing them all takes this many calls. */
-export const SHIPMENT_PAGES = 8;
+const SHIPMENT_PAGES = 8;
 
 type Item = keyof typeof STOCK;
 

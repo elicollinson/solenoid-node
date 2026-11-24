@@ -47,6 +47,13 @@ export default [
         'two lines, the right total and date',
         (o) => o.lines.length === 2 && o.total === 52 && o.shipBy === '2026-12-01'
       ),
+      output<z.infer<typeof Order>>('the customer and each line as given', (o) => {
+        const line = (item: RegExp, quantity: number, unitPrice: number) =>
+          o.lines.some(
+            (l) => item.test(l.item) && l.quantity === quantity && l.unitPrice === unitPrice
+          );
+        return /dana reyes/i.test(o.customer) && line(/widget/i, 3, 9) && line(/gear/i, 2, 12.5);
+      }),
     ],
   }),
 ];

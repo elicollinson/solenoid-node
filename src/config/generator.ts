@@ -32,6 +32,7 @@ export interface EnvMapping {
 export const DEFAULT_ENV_MAPPINGS: EnvMapping[] = [
   { envVar: 'BRAVE_SEARCH_API_KEY', settingsPath: ['search', 'brave_search_api_key'] },
   { envVar: 'LMSTUDIO_BASE_URL', settingsPath: ['providers', 'lmstudio', 'base_url'] },
+  { envVar: 'OMLX_BASE_URL', settingsPath: ['providers', 'omlx', 'base_url'] },
 ];
 
 /**

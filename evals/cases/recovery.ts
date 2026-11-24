@@ -3,7 +3,7 @@
  * tool that stays down is given up on and reported.
  */
 import { defineCase } from '../case.js';
-import { answered, callCount, called, noRepeatedFailedCall } from '../checks.js';
+import { answered, callCount, called, noRepeatedFailedCall, onlyChanged } from '../checks.js';
 import { tickets } from '../worlds/tickets.js';
 import { warehouse } from '../worlds/warehouse.js';
 
@@ -13,7 +13,12 @@ export default [
     world: tickets,
     // "17" is refused with the id format; a model that sends T-17 first passes untested.
     turns: ['What is the priority of ticket 17?'],
-    checks: [called('get_ticket', { id: 'T-17' }), noRepeatedFailedCall(), answered(/urgent/i)],
+    checks: [
+      called('get_ticket', { id: 'T-17' }),
+      noRepeatedFailedCall(),
+      answered(/\burgent\b/i),
+      onlyChanged(tickets),
+    ],
   }),
   defineCase({
     id: 'recovery/gives-up-on-a-dead-tool',
