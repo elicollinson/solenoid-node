@@ -8,7 +8,7 @@ import {
   type ChatDelta,
   OpenAICompatibleProvider,
   isTransientProviderError,
-} from '../../src/core/providers.js';
+} from '@elicollinson/solenoid-engine/core';
 
 function fakeClient(chunks: unknown[]) {
   const requests: Record<string, unknown>[] = [];

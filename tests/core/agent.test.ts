@@ -17,7 +17,7 @@ import {
   PromptInjectionScreeningError,
   ProviderStalledError,
   defineTool,
-} from '../../src/core/index.js';
+} from '@elicollinson/solenoid-engine/core';
 
 function allow(input: TextInput): ScreeningResult {
   return {

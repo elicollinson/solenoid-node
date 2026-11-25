@@ -28,10 +28,10 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   LAST_TURN_NOTICE,
   SUBAGENT_GUIDE,
+  builtinTools,
   parseToolArgs,
   profileTools,
 } from '../src/index.js';
-import { builtinTools } from '../src/tools/index.js';
 import { type EvalCase, profileOf } from './case.js';
 import { type TrialRecord, conditionOf, grade, table, trialKey } from './report.js';
 

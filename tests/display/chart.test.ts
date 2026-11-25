@@ -2,7 +2,7 @@
  * Chart argument parsing.
  */
 import { describe, expect, test } from 'bun:test';
-import { parseChartArgs } from '../../src/display/index.js';
+import { parseChartArgs } from '@elicollinson/solenoid-engine/display';
 
 describe('parseChartArgs', () => {
   test('a line graph gets a width, 60 columns unless one is given', () => {

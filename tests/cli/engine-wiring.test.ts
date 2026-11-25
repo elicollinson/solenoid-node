@@ -768,7 +768,10 @@ describe('3. Headless CLI / Session parity via @elicollinson/solenoid-engine (10
         expect(await session1.send('What is the project code?', { onEvent: () => {} })).toBe(
           'Your project code is Solenoid-42.'
         );
-        expect(provider1.calls[1]?.map((m) => m.content)).toEqual([
+        expect(provider1.calls[1]?.[0]?.role).toBe('system');
+        expect(
+          provider1.calls[1]?.filter((m) => m.role !== 'system').map((m) => m.content)
+        ).toEqual([
           'Remember project Solenoid-42.',
           'Got it, project code is Solenoid-42.',
           'What is the project code?',
@@ -836,7 +839,10 @@ describe('3. Headless CLI / Session parity via @elicollinson/solenoid-engine (10
         expect(await continued.session.send('Keep going on topic 2', { onEvent: () => {} })).toBe(
           'Continuing second topic.'
         );
-        expect(provider2.calls[0]?.map((m) => m.content)).toEqual([
+        expect(provider2.calls[0]?.[0]?.role).toBe('system');
+        expect(
+          provider2.calls[0]?.filter((m) => m.role !== 'system').map((m) => m.content)
+        ).toEqual([
           'Start second topic',
           'Second topic opened.',
           'Keep going on topic 2',
@@ -857,7 +863,10 @@ describe('3. Headless CLI / Session parity via @elicollinson/solenoid-engine (10
         expect(await resumed.session.send('Remind me of the code.', { onEvent: () => {} })).toBe(
           'Still Solenoid-42.'
         );
-        expect(provider2.calls[1]?.map((m) => m.content)).toEqual([
+        expect(provider2.calls[1]?.[0]?.role).toBe('system');
+        expect(
+          provider2.calls[1]?.filter((m) => m.role !== 'system').map((m) => m.content)
+        ).toEqual([
           'Remember project Solenoid-42.',
           'Got it, project code is Solenoid-42.',
           'What is the project code?',

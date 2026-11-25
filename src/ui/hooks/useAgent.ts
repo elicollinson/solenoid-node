@@ -4,9 +4,10 @@
  * Builds the harness once (connecting MCP servers) behind React Suspense and
  * hands the UI a conversation session for it.
  */
+import { type Harness, type Session, createHarness } from '@elicollinson/solenoid-engine';
 import { useState } from 'react';
-import { loadSettings } from '../../config/index.js';
-import { type Harness, type Session, createHarness } from '../../harness/index.js';
+import { getSettingsPath, loadSettings } from '../../config/index.js';
+import { agentLogger } from '../../utils/logger.js';
 
 /**
  * Resource wrapper for Suspense compatibility.
@@ -42,7 +43,15 @@ let harnessResource: ReturnType<typeof createResource<Harness>> | null = null;
 
 function getHarnessResource() {
   if (!harnessResource) {
-    harnessResource = createResource(Promise.resolve().then(() => createHarness(loadSettings())));
+    harnessResource = createResource(
+      Promise.resolve().then(() => {
+        const settings = loadSettings();
+        return createHarness(settings, {
+          logger: agentLogger,
+          settingsPath: getSettingsPath() ?? undefined,
+        });
+      })
+    );
   }
   return harnessResource;
 }

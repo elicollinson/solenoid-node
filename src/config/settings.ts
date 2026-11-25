@@ -10,10 +10,10 @@
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { writeSettingsFile } from './generator.js';
-import { type AppSettings, AppSettingsSchema, type ProviderName } from './schema.js';
+import { type AppSettings, AppSettingsSchema } from './schema.js';
 
 const DEFAULT_SETTINGS_FILENAME = 'app_settings.yaml';
 const SOLENOID_CONFIG_DIR = '.solenoid';
@@ -167,65 +167,11 @@ export function saveSettings(settings: Record<string, unknown>): void {
   cachedSettings = null; // Clear validated cache so it reloads
 }
 
-export const PROVIDER_KEY_ENV: Record<ProviderName, string> = {
-  lmstudio: 'LMSTUDIO_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  omlx: 'OMLX_API_KEY',
-};
-
-/**
- * A secret: the environment variable wins over the settings file so secrets
- * can stay out of it. Empty counts as unset in both.
- */
-function secret(envVar: string, fromFile: string | undefined): string | undefined {
-  return process.env[envVar] || fromFile || undefined;
-}
-
-export function getProviderApiKey(
-  provider: ProviderName,
-  settings: AppSettings
-): string | undefined {
-  return secret(PROVIDER_KEY_ENV[provider], settings.providers[provider].api_key);
-}
-
-/** The Brave Search key, or undefined when web search is unavailable. */
-export function getSearchApiKey(settings: AppSettings): string | undefined {
-  if (settings.search.provider !== 'brave') return undefined;
-  return secret('BRAVE_SEARCH_API_KEY', settings.search.brave_search_api_key);
-}
-
-/** Local SQLite path for session checkpoints (~/.solenoid/checkpoints.db by default). */
-export function getSqliteCheckpointPath(settings: AppSettings): string {
-  if (settings.checkpoints.sqlite_path) {
-    return resolve(settings.checkpoints.sqlite_path);
-  }
-  if (process.env.NODE_ENV === 'test') {
-    return ':memory:';
-  }
-  return resolve(homedir(), SOLENOID_CONFIG_DIR, 'checkpoints.db');
-}
-
-export interface SupabaseCredentials {
-  url: string;
-  apiKey: string;
-  tablePrefix: string;
-}
-
-/**
- * Supabase connection settings for remote checkpoints, or undefined when not
- * configured. Environment variables override app_settings.yaml.
- */
-export function getSupabaseCheckpointConfig(
-  settings: AppSettings
-): SupabaseCredentials | undefined {
-  const supabase = settings.checkpoints.supabase;
-  const url = secret('SUPABASE_URL', supabase.url);
-  const apiKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    supabase.api_key ||
-    undefined;
-  if (!url || !apiKey) return undefined;
-  return { url, apiKey, tablePrefix: supabase.table_prefix };
-}
+export {
+  PROVIDER_KEY_ENV,
+  type SupabaseCredentials,
+  getProviderApiKey,
+  getSearchApiKey,
+  getSqliteCheckpointPath,
+  getSupabaseCheckpointConfig,
+} from '@elicollinson/solenoid-engine/config';

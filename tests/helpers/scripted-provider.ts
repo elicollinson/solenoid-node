@@ -2,7 +2,7 @@
  * A chat provider that answers from a script, streaming text as deltas. No
  * network.
  */
-import type { ChatMessage, ChatOptions, ChatProvider } from '../../src/core/index.js';
+import type { ChatMessage, ChatOptions, ChatProvider } from '@elicollinson/solenoid-engine/core';
 
 export type Step = ChatMessage | Error | ((messages: ChatMessage[], opts: ChatOptions) => ChatMessage);
 

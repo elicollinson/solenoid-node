@@ -8,7 +8,7 @@ import {
   type ToolContext,
   defineTool,
   toolName,
-} from '../../src/core/index.js';
+} from '@elicollinson/solenoid-engine/core';
 
 /** A tool that takes nothing and answers `<name> ran`. */
 const fixtureTool =

@@ -8,8 +8,8 @@
  * through the catalog (./catalog.tsx).
  */
 import type { Message as AgUiMessage, ToolCall as AgUiToolCall, ToolMessage } from '@ag-ui/core';
+import { toolStatus } from '@elicollinson/solenoid-engine/harness';
 import { Box, Text } from 'ink';
-import { toolStatus } from '../../harness/index.js';
 import { type Bubble, type Notice, type ReplyItem, threadBubbles } from '../thread.js';
 import { Markdown } from './Markdown.js';
 import { ActivityView } from './catalog.js';

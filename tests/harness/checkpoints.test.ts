@@ -10,7 +10,7 @@
 import { describe, expect, test } from 'bun:test';
 import { type AGUIEvent, EventType } from '@ag-ui/core';
 import { AppSettingsSchema } from '../../src/config/index.js';
-import { Agent } from '../../src/core/index.js';
+import { Agent } from '@elicollinson/solenoid-engine/core';
 import {
   CompositeCheckpointStore,
   Session,
@@ -19,7 +19,7 @@ import {
   applyEvent,
   createHarness,
   supabaseSchemaSql,
-} from '../../src/harness/index.js';
+} from '@elicollinson/solenoid-engine/harness';
 import { ScriptedProvider, say } from '../helpers/scripted-provider.js';
 
 /** In-memory mock of Supabase PostgREST endpoints for sessions and checkpoints. */

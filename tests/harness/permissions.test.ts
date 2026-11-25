@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { AppSettingsSchema } from '../../src/config/index.js';
-import { Agent, type ApprovalRequest } from '../../src/core/index.js';
+import { Agent, type ApprovalRequest } from '@elicollinson/solenoid-engine/core';
 import {
   OPEN_TOOL_GROUP,
   Session,
@@ -13,7 +13,7 @@ import {
   profileTools,
   resolvePermission,
   withPermissions,
-} from '../../src/harness/index.js';
+} from '@elicollinson/solenoid-engine/harness';
 import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
 import { toolNames as names, readTool, writeTool } from '../helpers/tools.js';
 

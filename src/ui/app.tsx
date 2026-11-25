@@ -7,12 +7,9 @@
  * subagent finished) run here just like the person's.
  */
 import { type AGUIEvent, type Message as AgUiMessage, EventType } from '@ag-ui/core';
-import { Box, Text, useApp, useInput } from 'ink';
-import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
-import { type AppSettings, saveApprovalRule, saveDeviceName } from '../config/index.js';
-import { AgentAbortedError } from '../core/index.js';
 import {
   APPROVAL_REASON,
+  AgentAbortedError,
   type AutoTurn,
   CUSTOM_EVENTS,
   applyEvent,
@@ -22,7 +19,11 @@ import {
   describeRunError,
   findToolCall,
   parseToolArgs,
-} from '../harness/index.js';
+} from '@elicollinson/solenoid-engine';
+import { capabilityFor } from '@elicollinson/solenoid-security';
+import { Box, Text, useApp, useInput } from 'ink';
+import { Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { type AppSettings, saveApprovalRule, saveDeviceName } from '../config/index.js';
 import { uiLogger } from '../utils/logger.js';
 import {
   type ApprovalAnswer,
@@ -335,14 +336,18 @@ function AppContent() {
     setStatus(allow ? `Running: ${approval.tool}` : 'Declined');
     session.resume([approvalAnswer(openApproval.interruptId, allow ? 'allow' : 'decline')]);
     if (answer === 'always') {
-      const saved = saveApprovalRule(approval.tool);
+      const capability = capabilityFor(approval.tool);
+      const saved = saveApprovalRule(capability);
       if (saved.isValid) {
         // The rules as saved, which is what every session reads from now on.
         harness.setApprovalRules((saved.parsedValue as AppSettings['approvals']).rules);
       } else {
-        harness.setApprovalRules({ ...harness.settings.approvals.rules, [approval.tool]: 'allow' });
-        uiLogger.warn({ errors: saved.errors, tool: approval.tool }, 'Could not save the rule');
-        addSystemMessage(`Allowing ${approval.tool} until you quit; it could not be saved.`);
+        harness.setApprovalRules({ ...harness.settings.approvals.rules, [capability]: 'allow' });
+        uiLogger.warn(
+          { errors: saved.errors, tool: approval.tool, capability },
+          'Could not save the rule'
+        );
+        addSystemMessage(`Allowing ${capability} until you quit; it could not be saved.`);
       }
     }
   };

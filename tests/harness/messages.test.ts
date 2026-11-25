@@ -2,8 +2,8 @@
  * Run-error wording shown to a person.
  */
 import { describe, expect, test } from 'bun:test';
-import { ProviderStalledError } from '../../src/core/index.js';
-import { describeRunError } from '../../src/harness/index.js';
+import { ProviderStalledError } from '@elicollinson/solenoid-engine/core';
+import { describeRunError } from '@elicollinson/solenoid-engine/harness';
 
 describe('describeRunError', () => {
   test('a stall names the exact limit to raise', () => {
