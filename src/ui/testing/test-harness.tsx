@@ -1,4 +1,5 @@
 import { EventType } from '@ag-ui/core';
+import { CUSTOM_EVENTS, type Session, customValue } from '@elicollinson/solenoid-engine';
 import { TextInput } from '@inkjs/ui';
 import { Box, Text, useInput } from 'ink';
 /**
@@ -18,9 +19,6 @@ import type React from 'react';
 import { useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
-// Not harness/index.js, which would load the whole harness (MCP, providers,
-// screening) into every mock-agent test.
-import { CUSTOM_EVENTS, customValue } from '../../harness/ag-ui/encoder.js';
 import { MockAgent } from './mock-agent.js';
 import type {
   AgentEvent,
@@ -40,7 +38,7 @@ import type {
  * and tracks events for testing purposes. Write tools are auto-approved.
  */
 class RealAgentWrapper implements AgentInterface {
-  private session: import('../../harness/index.js').Session | null = null;
+  private session: Session | null = null;
   private closeHarness: (() => Promise<void>) | null = null;
   private eventHistory: AgentEvent[] = [];
   private initPromise: Promise<void> | null = null;
@@ -60,7 +58,7 @@ class RealAgentWrapper implements AgentInterface {
         try {
           // Dynamic import to avoid loading agent code when not needed
           const { AppSettingsSchema, tryLoadSettings } = await import('../../config/index.js');
-          const { createHarness } = await import('../../harness/index.js');
+          const { createHarness } = await import('@elicollinson/solenoid-engine');
           // Without a settings file, the defaults: Gemma on LM Studio at localhost.
           const harness = await createHarness(tryLoadSettings() ?? AppSettingsSchema.parse({}));
           // Tests run unattended with every write allowed.

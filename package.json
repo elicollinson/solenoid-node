@@ -46,7 +46,8 @@
   "dependencies": {
     "@ag-ui/core": "1.0.3",
     "@arizeai/openinference-semantic-conventions": "^2",
-    "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#7914c4270eeb25b47c2313eb327500a3b8c8edc6",
+    "@elicollinson/solenoid-engine": "github:elicollinson/solenoid-engine#ccdfdfe96f9694dc2d8d5c1a2ea792738e2f0e2c",
+    "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#ee3f9e00aeb22e0c0b34656b09a39b00c49fd761",
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@opentelemetry/api": "^1.9.0",

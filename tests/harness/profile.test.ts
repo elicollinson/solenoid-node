@@ -11,7 +11,7 @@ import {
   createHarness,
   defineProfile,
   profileTools,
-} from '../../src/harness/index.js';
+} from '@elicollinson/solenoid-engine/harness';
 import { fakeModelServer } from '../helpers/fake-model-server.js';
 import { call } from '../helpers/scripted-provider.js';
 import { toolNames as names, readTool as tool, writeTool } from '../helpers/tools.js';

@@ -4,13 +4,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { AGUIEvent } from '@ag-ui/core';
 import { z } from 'zod';
-import { Agent, type AgentTool, type ChatMessage, defineTool } from '../../src/core/index.js';
+import { Agent, type AgentTool, type ChatMessage, defineTool } from '@elicollinson/solenoid-engine/core';
 import {
   type AutoTurn,
   Session,
   SubagentManager,
   declineUnattended,
-} from '../../src/harness/index.js';
+} from '@elicollinson/solenoid-engine/harness';
 import { ScriptedProvider, type Step, call, say } from '../helpers/scripted-provider.js';
 import { toolContext } from '../helpers/tools.js';
 

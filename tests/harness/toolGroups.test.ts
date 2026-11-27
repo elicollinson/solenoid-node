@@ -3,13 +3,13 @@
  * turn, for as long as the transcript holds the call that opened it.
  */
 import { describe, expect, test } from 'bun:test';
-import { Agent, type AgentTool, type ChatMessage } from '../../src/core/index.js';
+import { Agent, type AgentTool, type ChatMessage } from '@elicollinson/solenoid-engine/core';
 import {
   OPEN_TOOL_GROUP,
   defineToolGroup,
   profileTools,
   toolGroupOpener,
-} from '../../src/harness/index.js';
+} from '@elicollinson/solenoid-engine/harness';
 import { ScriptedProvider, type Step, call, say } from '../helpers/scripted-provider.js';
 import { toolNames as names, readTool as tool, toolContext } from '../helpers/tools.js';
 

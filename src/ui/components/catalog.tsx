@@ -1,8 +1,13 @@
+import {
+  COMPONENTS,
+  type ChartContent,
+  type ComponentType,
+} from '@elicollinson/solenoid-engine/display';
 /**
  * Component Catalog
  *
- * The terminal's side of the display contract (../../display): one Ink
- * component per component type. Content is validated against the contract's
+ * The terminal's side of the display contract (`@elicollinson/solenoid-engine/display`):
+ * one Ink component per component type. Content is validated against the contract's
  * schema before it is drawn, so a malformed payload shows an error box
  * rather than a broken chart, and a type this terminal does not know is
  * named rather than dropped.
@@ -10,7 +15,6 @@
 import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
 import { z } from 'zod';
-import { COMPONENTS, type ChartContent, type ComponentType } from '../../display/index.js';
 import { ChartRenderer } from './ChartRenderer.js';
 
 const RENDERERS: {

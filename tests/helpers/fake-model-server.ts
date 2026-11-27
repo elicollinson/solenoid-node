@@ -3,7 +3,7 @@
  * that go through `createHarness` and so through the real provider client.
  * Loopback only.
  */
-import type { ChatMessage } from '../../src/core/index.js';
+import type { ChatMessage } from '@elicollinson/solenoid-engine/core';
 
 /** What the server was sent: the wire messages and the names of the tools offered. */
 export interface FakeRequest {

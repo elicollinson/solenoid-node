@@ -7,7 +7,8 @@
       "dependencies": {
         "@ag-ui/core": "1.0.3",
         "@arizeai/openinference-semantic-conventions": "^2",
-        "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#7914c4270eeb25b47c2313eb327500a3b8c8edc6",
+        "@elicollinson/solenoid-engine": "github:elicollinson/solenoid-engine#ccdfdfe96f9694dc2d8d5c1a2ea792738e2f0e2c",
+        "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#ee3f9e00aeb22e0c0b34656b09a39b00c49fd761",
         "@inkjs/ui": "^2.0.0",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "@opentelemetry/api": "^1.9.0",
@@ -110,7 +111,9 @@
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
-    "@elicollinson/solenoid-security": ["@elicollinson/solenoid-security@github:elicollinson/solenoid-security#7914c42", { "dependencies": { "google-auth-library": "^9.15.1" } }, "elicollinson-solenoid-security-7914c42"],
+    "@elicollinson/solenoid-engine": ["@elicollinson/solenoid-engine@github:elicollinson/solenoid-engine#ccdfdfe", { "dependencies": { "@ag-ui/core": "1.0.3", "@arizeai/openinference-semantic-conventions": "^2", "@elicollinson/solenoid-security": "github:elicollinson/solenoid-security#ee3f9e00aeb22e0c0b34656b09a39b00c49fd761", "@modelcontextprotocol/sdk": "^1.12.1", "@opentelemetry/api": "^1.9.0", "openai": "^6", "zod": "^4" } }, "elicollinson-solenoid-engine-ccdfdfe"],
+
+    "@elicollinson/solenoid-security": ["@elicollinson/solenoid-security@github:elicollinson/solenoid-security#ee3f9e0", { "dependencies": { "google-auth-library": "^9.15.1" } }, "elicollinson-solenoid-security-ee3f9e0"],
 
     "@hono/node-server": ["@hono/node-server@2.1.6", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ=="],
 

@@ -1,4 +1,14 @@
 import { type AGUIEvent, EventType } from '@ag-ui/core';
+import {
+  type AgentProfile,
+  CUSTOM_EVENTS,
+  type Session,
+  createHarness,
+  customValue,
+  describeRouteAdvance,
+  describeRunError,
+} from '@elicollinson/solenoid-engine';
+import { declineUnattended } from '@elicollinson/solenoid-security';
 /**
  * Non-Interactive CLI Runner
  *
@@ -9,19 +19,9 @@ import { type AGUIEvent, EventType } from '@ag-ui/core';
  * running when the agent answers are waited for, and the turns their news
  * starts write answers too.
  */
-import { loadSettings } from './config/index.js';
-import {
-  type AgentProfile,
-  CUSTOM_EVENTS,
-  type Session,
-  createHarness,
-  customValue,
-  declineUnattended,
-  describeRouteAdvance,
-  describeRunError,
-} from './harness/index.js';
+import { getSettingsPath, loadSettings } from './config/index.js';
 import { initTracing, shutdownTracing } from './telemetry/index.js';
-import { setupErrorHandlers, uiLogger } from './utils/logger.js';
+import { agentLogger, setupErrorHandlers, uiLogger } from './utils/logger.js';
 
 export interface NonInteractiveOptions {
   /** Allow write tools without asking. */
@@ -42,7 +42,11 @@ export async function runNonInteractive(
 
   let close: (() => Promise<void>) | undefined;
   try {
-    const harness = await createHarness(loadSettings());
+    const settings = loadSettings();
+    const harness = await createHarness(settings, {
+      logger: agentLogger,
+      settingsPath: getSettingsPath() ?? undefined,
+    });
     close = harness.close;
     for (const warning of harness.warnings) {
       process.stderr.write(`warning: ${warning}\n`);

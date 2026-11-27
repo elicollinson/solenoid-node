@@ -3,7 +3,7 @@
  *
  * Opt-in tracing: enabled only when WANDB_API_KEY and WANDB_PROJECT_ID are set.
  * Registers a global tracer provider with a BatchSpanProcessor + OTLP protobuf
- * exporter targeting Weave's trace endpoint. The core (src/core/tracing.ts)
+ * exporter targeting Weave's trace endpoint. The engine (`@elicollinson/solenoid-engine`)
  * emits OpenInference spans for every agent run, model call, tool call and
  * injection screen; without a registered provider those spans are no-ops.
  */

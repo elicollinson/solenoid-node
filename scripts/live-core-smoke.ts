@@ -20,7 +20,7 @@ import {
   type ChatMessage,
   OpenAICompatibleProvider,
   defineTool,
-} from '../src/core/index.js';
+} from '@elicollinson/solenoid-engine';
 
 const lmstudioUrl = process.env.LMSTUDIO_BASE_URL ?? 'http://localhost:1234/v1';
 const lmstudioKey = process.env.LMSTUDIO_API_KEY ?? 'lm-studio';

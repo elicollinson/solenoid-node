@@ -4,9 +4,9 @@
 import { describe, expect, test } from 'bun:test';
 import { type AGUIEvent, EventType } from '@ag-ui/core';
 import { z } from 'zod';
-import { Agent, defineTool } from '../../src/core/index.js';
-import { APPROVAL_REASON, Session, applyEvent } from '../../src/harness/index.js';
-import { renderChartTool } from '../../src/tools/index.js';
+import { Agent, defineTool } from '@elicollinson/solenoid-engine/core';
+import { APPROVAL_REASON, Session, applyEvent } from '@elicollinson/solenoid-engine/harness';
+import { renderChartTool } from '@elicollinson/solenoid-engine/tools';
 import { ScriptedProvider, call, say } from '../helpers/scripted-provider.js';
 
 function writeTool(log: string[]) {

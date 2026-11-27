@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message } from '@ag-ui/core';
 import { render } from 'ink-testing-library';
-import { SOLENOID_METADATA_KEY } from '../../../../src/harness/index.js';
+import { SOLENOID_METADATA_KEY } from '@elicollinson/solenoid-engine/harness';
 import { MessageList } from '../../../../src/ui/components/MessageList.js';
 
 const user = (id: string, content: string): Message => ({ id, role: 'user', content });

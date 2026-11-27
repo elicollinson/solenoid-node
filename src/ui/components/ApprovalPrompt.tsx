@@ -1,13 +1,13 @@
+import { type ApprovalRequest, safeJson } from '@elicollinson/solenoid-engine';
+import { capabilityFor } from '@elicollinson/solenoid-security';
 /**
  * Approval Prompt Component
  *
  * Shown when the agent wants to run a write tool. The run is paused until
- * the person answers: y/Enter allows the call, a allows it and every later
- * call of the tool (a standing rule, saved to settings), n/Esc declines it.
+ * the person answers: y/Enter allows the call, a allows its canonical
+ * capability from now on (a standing rule, saved to settings), n/Esc declines it.
  */
 import { Box, Text, useInput } from 'ink';
-import type { ApprovalRequest } from '../../core/index.js';
-import { safeJson } from '../../core/tracing.js';
 
 export type PendingApproval = Pick<ApprovalRequest, 'tool' | 'description' | 'args'>;
 
@@ -35,6 +35,7 @@ export function ApprovalPrompt({ approval, onAnswer }: ApprovalPromptProps) {
   });
 
   const firstLine = approval.description.split('\n')[0] ?? '';
+  const capability = capabilityFor(approval.tool);
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
@@ -44,8 +45,8 @@ export function ApprovalPrompt({ approval, onAnswer }: ApprovalPromptProps) {
       {firstLine && <Text dimColor>{firstLine}</Text>}
       <Text>{formatArgs(approval.args)}</Text>
       <Text>
-        <Text color="green">[y]</Text> allow <Text color="green">[a]</Text> always allow{' '}
-        <Text color="red">[n]</Text> decline
+        <Text color="green">[y]</Text> allow <Text color="green">[a]</Text> always allow (
+        {capability}) <Text color="red">[n]</Text> decline
       </Text>
     </Box>
   );

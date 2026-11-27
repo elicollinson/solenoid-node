@@ -5,7 +5,7 @@ import {
   ProviderStalledError,
   isTransientProviderError,
   stallGuardedFetch,
-} from '../../src/core/index.js';
+} from '@elicollinson/solenoid-engine/core';
 
 const encoder = new TextEncoder();
 const limits = { firstByteMs: 40, idleMs: 40 };

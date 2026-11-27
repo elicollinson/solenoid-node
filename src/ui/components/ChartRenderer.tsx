@@ -1,19 +1,19 @@
-import { BarChart, LineGraph, Sparkline, StackedBarChart } from '@pppp606/ink-chart';
-/**
- * Chart Renderer Component
- *
- * Draws `solenoid.chart` content (../../display/chart.ts) with ink-chart: bar
- * charts, stacked bar charts, line graphs and sparklines. The catalog
- * (./catalog.tsx) validates the content before it gets here.
- */
-import { Box, Text } from 'ink';
 import type {
   BarChartConfig,
   ChartContent,
   LineGraphConfig,
   SparklineConfig,
   StackedBarChartConfig,
-} from '../../display/index.js';
+} from '@elicollinson/solenoid-engine/display';
+import { BarChart, LineGraph, Sparkline, StackedBarChart } from '@pppp606/ink-chart';
+/**
+ * Chart Renderer Component
+ *
+ * Draws `solenoid.chart` content (`@elicollinson/solenoid-engine/display`) with
+ * ink-chart: bar charts, stacked bar charts, line graphs and sparklines. The
+ * catalog (`./catalog.tsx`) validates the content before it gets here.
+ */
+import { Box, Text } from 'ink';
 
 interface ChartRendererProps {
   config: ChartContent;
