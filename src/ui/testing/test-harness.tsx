@@ -16,7 +16,7 @@ import { Box, Text, useInput } from 'ink';
  */
 import { render } from 'ink-testing-library';
 import type React from 'react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getEnvVarStatus, writeSettingsFile } from '../../config/generator.js';
 import { clearSettingsCache } from '../../config/settings.js';
 import { MockAgent } from './mock-agent.js';
@@ -235,6 +235,10 @@ export class SolenoidTestHarness {
   private frameHistory: StructuredFrame[] = [];
   private disposed = false;
   private generatedSettingsPath: string | null = null;
+  /** What the test app's input has reported holding since the last send began. */
+  private typed = '';
+  /** How many submissions the test app has finished handling and drawn. */
+  private handled = 0;
 
   constructor(config: TestHarnessConfig = {}) {
     this.config = {
@@ -307,22 +311,33 @@ export class SolenoidTestHarness {
   }
 
   /**
-   * Send a message through the chat input
+   * Send a message through the chat input and wait until the app has handled
+   * it. Each step waits for the app to report it, never for a fixed time: under
+   * load a pause can be too short, so Enter submits an empty input, or an idle
+   * frame is read as done before the app has begun. Times out if the input is
+   * disabled, since the text never arrives.
    */
   async sendMessage(text: string): Promise<CommandResult> {
     this.ensureStarted();
     const startFrameIndex = this.frameHistory.length;
+    const handledBefore = this.handled;
 
-    // Type the message
+    // Type the message and wait until the input holds it.
+    this.typed = '';
     this.instance!.stdin.write(text);
-    await this.tick();
+    await this.waitFor(() => this.typed.endsWith(text), {
+      interval: 5,
+      // Typing does not wait on the agent, so it gets no agent-sized timeout.
+      timeout: Math.min(this.config.timeout, 5000),
+      what: 'the input to hold the text',
+    });
 
-    // Press enter to submit
+    // Press enter and wait until the app has handled the submission and drawn it.
     this.instance!.stdin.write('\r');
-    await this.tick();
-
-    // Wait for processing to complete
-    await this.waitForIdle();
+    await this.waitFor(() => this.handled > handledBefore, {
+      interval: 5,
+      what: 'the app to finish the message',
+    });
 
     return this.createResult(startFrameIndex);
   }
@@ -437,11 +452,11 @@ export class SolenoidTestHarness {
   }
 
   /**
-   * Wait for a condition to be true
+   * Wait for a condition to be true. `what` names it in the timeout's error.
    */
   async waitFor(
     condition: () => boolean,
-    options: { timeout?: number; interval?: number } = {}
+    options: { timeout?: number; interval?: number; what?: string } = {}
   ): Promise<void> {
     const timeout = options.timeout ?? this.config.timeout;
     const interval = options.interval ?? 50;
@@ -449,7 +464,7 @@ export class SolenoidTestHarness {
 
     while (!condition()) {
       if (Date.now() - start > timeout) {
-        throw new Error(`Timeout waiting for condition after ${timeout}ms`);
+        throw new Error(`Timeout waiting for ${options.what ?? 'condition'} after ${timeout}ms`);
       }
       await this.tick(interval);
     }
@@ -465,7 +480,10 @@ export class SolenoidTestHarness {
   }
 
   /**
-   * Wait for processing to complete
+   * Wait until the frame shows no response in progress. A frame looks the
+   * same before a response starts as after it ends, so call this only once a
+   * frame has shown the response under way. `sendMessage` needs no such call
+   * after it: it waits for its own message.
    */
   async waitForIdle(): Promise<void> {
     await this.waitFor(() => {
@@ -594,6 +612,12 @@ export class SolenoidTestHarness {
     const eventHistory = this.eventHistory;
     const initialMessages = this.config.initialMessages;
     const debug = this.config.debug;
+    const typing = (value: string) => {
+      this.typed = value;
+    };
+    const settled = (count: number) => {
+      this.handled = count;
+    };
 
     // Simple test app component
     const TestApp = () => {
@@ -601,7 +625,12 @@ export class SolenoidTestHarness {
       const [isProcessing, setIsProcessing] = useState(false);
       const [status, setStatus] = useState('Ready');
       const [inputKey, setInputKey] = useState(0);
+      const [handled, setHandled] = useState(0);
       const interruptRef = useRef(false);
+
+      // Reported from an effect, which here runs once the frame showing the
+      // change is written: the test renderer draws each commit at once.
+      useEffect(() => settled(handled), [handled]);
 
       // Interrupt handler - active during processing
       useInput(
@@ -780,7 +809,10 @@ export class SolenoidTestHarness {
             <TextInput
               key={inputKey}
               placeholder={isProcessing ? 'Waiting for response...' : 'Ask the agent...'}
-              onSubmit={handleSubmit}
+              onChange={typing}
+              onSubmit={(text) =>
+                handleSubmit(text).finally(() => setHandled((count) => count + 1))
+              }
               isDisabled={isProcessing}
             />
           </Box>
@@ -804,10 +836,11 @@ export class SolenoidTestHarness {
   }
 
   private captureFrame(): void {
-    if (this.instance) {
-      const frame = this.createStructuredFrame(this.instance.lastFrame() ?? '');
-      this.frameHistory.push(frame);
-    }
+    if (!this.instance) return;
+    const raw = this.instance.lastFrame() ?? '';
+    // Waits look far more often than the app redraws: keep each redraw once.
+    if (raw === this.frameHistory.at(-1)?.raw) return;
+    this.frameHistory.push(this.createStructuredFrame(raw));
   }
 
   private createStructuredFrame(raw: string): StructuredFrame {

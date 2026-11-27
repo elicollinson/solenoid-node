@@ -29,8 +29,8 @@ describe('Agent Interrupt', () => {
     // Start message processing (don't await - we want to interrupt)
     const resultPromise = harness.sendMessage('tell me something');
 
-    // Wait for some chunks to arrive
-    await new Promise((r) => setTimeout(r, 150));
+    // Wait for the response to be under way
+    await harness.waitForText('chunk1');
 
     // Interrupt
     await harness.interruptAgent();
@@ -42,14 +42,13 @@ describe('Agent Interrupt', () => {
     // Should have some partial content
     expect(frame.containsText('chunk1')).toBe(true);
     // Should not have all chunks (interrupted before completion)
-    // Note: timing-dependent, but with 100ms delay and 150ms wait,
-    // we should get 1-2 chunks before interrupt
+    expect(frame.containsText('chunk5')).toBe(false);
   });
 
   it('re-enables input after interrupt', async () => {
     const resultPromise = harness.sendMessage('tell me something');
 
-    await new Promise((r) => setTimeout(r, 150));
+    await harness.waitForText('chunk1');
     await harness.interruptAgent();
     await resultPromise;
 
@@ -61,7 +60,7 @@ describe('Agent Interrupt', () => {
   it('conversation continues after interrupt', async () => {
     // First message - interrupt it
     const firstResult = harness.sendMessage('first message');
-    await new Promise((r) => setTimeout(r, 150));
+    await harness.waitForText('chunk1');
     await harness.interruptAgent();
     await firstResult;
 
@@ -76,7 +75,7 @@ describe('Agent Interrupt', () => {
   it('status returns to Ready after interrupt', async () => {
     const resultPromise = harness.sendMessage('tell me something');
 
-    await new Promise((r) => setTimeout(r, 150));
+    await harness.waitForText('chunk1');
     await harness.interruptAgent();
     await resultPromise;
 
